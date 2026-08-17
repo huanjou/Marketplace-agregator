@@ -1,0 +1,52 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\DTO\Search;
+
+readonly class ProductSearchQuery
+{
+    /**
+     * @param string[] $providerCodes
+     */
+    public function __construct(
+        public string $text = '',
+        public ProductSearchFilters $filters = new ProductSearchFilters(),
+        public ProductSort $sort = new ProductSort(),
+        public int $page = 1,
+        public int $perPage = 20,
+        public array $providerCodes = [],
+        public int $timeoutMs = 5000,
+    ) {}
+
+    public function normalized(): self
+    {
+        $codes = $this->providerCodes;
+        sort($codes);
+
+        return new self(
+            text: mb_strtolower(trim($this->text)),
+            filters: $this->filters,
+            sort: $this->sort,
+            page: max(1, $this->page),
+            perPage: min(100, max(1, $this->perPage)),
+            providerCodes: $codes,
+            timeoutMs: $this->timeoutMs,
+        );
+    }
+
+    public function cacheFingerprint(): string
+    {
+        $normalized = $this->normalized();
+        $payload = json_encode([
+            'text' => $normalized->text,
+            'filters' => $normalized->filters->toArray(),
+            'sort' => $normalized->sort->field->value . '_' . $normalized->sort->direction,
+            'page' => $normalized->page,
+            'per_page' => $normalized->perPage,
+            'providers' => $normalized->providerCodes,
+        ]);
+
+        return hash('sha256', $payload);
+    }
+}
