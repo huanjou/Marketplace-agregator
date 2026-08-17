@@ -8,6 +8,7 @@ use App\DTO\Marketplace\ExternalProductData;
 use App\DTO\Search\ProductSearchFilters;
 use App\DTO\Search\ProductSearchQuery;
 use App\DTO\Search\ProductSort;
+use App\Enums\ProviderCode;
 use App\Enums\SearchSortField;
 use App\Filament\Widgets\ProviderStatusWidget;
 use App\Filament\Widgets\SearchStatsWidget;
@@ -90,7 +91,7 @@ class ProductSearchDashboard extends Page implements HasForms
     {
         $this->form->fill([
             'query' => null,
-            'providerCodes' => app(ProviderRegistry::class)->enabled()->keys()->all(),
+            'providerCodes' => [ProviderCode::Ozon->value, ProviderCode::YandexMarket->value],
             'minPrice' => null,
             'maxPrice' => null,
             'brands' => [],
@@ -119,9 +120,11 @@ class ProductSearchDashboard extends Page implements HasForms
                     ->multiple()
                     ->options(fn (): array => $this->providerOptions())
                     ->placeholder('All enabled')
+                    ->live()
                     ->columnSpan(1),
             ]),
 
+            /*
             Section::make('Filters')
                 ->description('Narrow the fan-out. Prices are in roubles.')
                 ->icon('heroicon-o-adjustments-horizontal')
@@ -172,6 +175,7 @@ class ProductSearchDashboard extends Page implements HasForms
                             ->selectablePlaceholder(false),
                     ]),
                 ]),
+            */
         ]);
     }
 
@@ -200,7 +204,9 @@ class ProductSearchDashboard extends Page implements HasForms
     protected function getHeaderWidgets(): array
     {
         return [
-            ProviderStatusWidget::class,
+            ProviderStatusWidget::make([
+                'selectedProviders' => $this->providerCodes,
+            ]),
         ];
     }
 

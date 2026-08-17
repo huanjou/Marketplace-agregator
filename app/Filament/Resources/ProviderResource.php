@@ -22,6 +22,8 @@ class ProviderResource extends Resource
 
     protected static ?string $navigationGroup = 'Catalogue';
 
+    protected static bool $shouldRegisterNavigation = false;
+
     protected static ?int $navigationSort = 10;
 
     protected static ?string $modelLabel = 'marketplace';

@@ -9,6 +9,7 @@ use App\Services\ProviderRegistry;
 use Filament\Widgets\StatsOverviewWidget;
 use Filament\Widgets\StatsOverviewWidget\Stat;
 use Illuminate\Support\Facades\Cache;
+use Livewire\Attributes\Reactive;
 use Throwable;
 
 /**
@@ -22,6 +23,9 @@ class ProviderStatusWidget extends StatsOverviewWidget
     private const CACHE_KEY = 'admin.provider-health-snapshot';
 
     private const CACHE_TTL_SECONDS = 60;
+
+    #[Reactive]
+    public ?array $selectedProviders = null;
 
     protected ?string $heading = 'Marketplace health';
 
@@ -37,6 +41,15 @@ class ProviderStatusWidget extends StatsOverviewWidget
             self::CACHE_TTL_SECONDS,
             fn (): array => $this->snapshot()
         );
+
+        $selected = $this->selectedProviders;
+
+        if ($selected !== null && $selected !== []) {
+            $snapshot = array_filter(
+                $snapshot, 
+                fn (array $row): bool => in_array($row['code'], $selected, true)
+            );
+        }
 
         if ($snapshot === []) {
             return [
@@ -76,6 +89,7 @@ class ProviderStatusWidget extends StatsOverviewWidget
                     $health = $provider->healthCheck();
 
                     return [
+                        'code' => $provider->code(),
                         'name' => $provider->displayName(),
                         'status' => $health->status,
                         'message' => trim(sprintf(
@@ -86,6 +100,7 @@ class ProviderStatusWidget extends StatsOverviewWidget
                     ];
                 } catch (Throwable $e) {
                     return [
+                        'code' => $provider->code(),
                         'name' => $provider->displayName(),
                         'status' => 'down',
                         'message' => $e->getMessage(),
