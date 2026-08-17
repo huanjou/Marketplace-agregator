@@ -360,6 +360,8 @@ export async function scrape(page, { query, page: pageNum = 1, timeout_ms: timeo
       )
       .catch(() => '');
 
+    const seenIds = new Set();
+
     if (flightData) {
       const decoded = decodeFlightChunks(flightData) || flightData;
       const candidates = mineProductObjects(decoded, [
@@ -368,8 +370,6 @@ export async function scrape(page, { query, page: pageNum = 1, timeout_ms: timeo
         '"productId":',
         '"skuId":',
       ]);
-
-      const seenIds = new Set();
 
       items = candidates
         .map((entry) => normalizeJsonEntry(entry))
@@ -387,116 +387,113 @@ export async function scrape(page, { query, page: pageNum = 1, timeout_ms: timeo
       }
     }
 
-    if (items.length === 0) {
-      // Snippets are hydrated client-side, so give them a bounded moment to appear.
-      await page
-        .waitForSelector(SNIPPET_SELECTOR, {
-          timeout: Math.min(5000, Math.max(500, timeoutMs - elapsed() - 800)),
-        })
-        .catch(() => null);
+    // Snippets are hydrated client-side, so give them a bounded moment to appear.
+    await page
+      .waitForSelector(SNIPPET_SELECTOR, {
+        timeout: Math.min(5000, Math.max(500, timeoutMs - elapsed() - 800)),
+      })
+      .catch(() => null);
 
-      // The SERP lazy-loads snippets on scroll; nudge it while the budget allows.
-      for (let step = 0; step < 3 && timeoutMs - elapsed() > 2500; step += 1) {
-        await page.evaluate(() => window.scrollBy(0, window.innerHeight * 2)).catch(() => null);
-        await page.waitForTimeout(400);
-      }
+    // The SERP lazy-loads snippets on scroll; nudge it while the budget allows.
+    for (let step = 0; step < 3 && timeoutMs - elapsed() > 2500; step += 1) {
+      await page.evaluate(() => window.scrollBy(0, window.innerHeight * 2)).catch(() => null);
+      await page.waitForTimeout(400);
+    }
 
-      const rawCards = await page
-        .$$eval(
-          SNIPPET_SELECTOR,
-          (cards) =>
-            cards.slice(0, 60).map((card) => {
-              const text = (selector) => card.querySelector(selector)?.textContent?.trim() ?? null;
-              const anchor =
-                card.querySelector('a[data-auto="snippet-link"]') ??
-                card.querySelector('a[href*="/card/"]') ??
-                card.querySelector('a[href*="/product"]') ??
-                card.querySelector('a[href]');
-              const image = card.querySelector('img');
+    const rawCards = await page
+      .$$eval(
+        SNIPPET_SELECTOR,
+        (cards) =>
+          cards.slice(0, 60).map((card) => {
+            const text = (selector) => card.querySelector(selector)?.textContent?.trim() ?? null;
+            const anchor =
+              card.querySelector('a[data-auto="snippet-link"]') ??
+              card.querySelector('a[href*="/card/"]') ??
+              card.querySelector('a[href*="/product"]') ??
+              card.querySelector('a[href]');
+            const image = card.querySelector('img');
 
-              return {
-                href: anchor?.getAttribute('href') ?? null,
-                zoneData: card.getAttribute('data-zone-data') ?? null,
-                productId:
-                  card.getAttribute('data-product-id') ?? card.getAttribute('data-id') ?? null,
-                title:
-                  text('[data-auto="snippet-title"]') ??
-                  text('[data-zone-name="title"]') ??
-                  text('h3') ??
-                  image?.getAttribute('alt') ??
-                  null,
-                price:
-                  text('[data-auto="snippet-price-current"]') ??
-                  text('[data-auto="price-value"]') ??
-                  text('[data-auto="mainPrice"]') ??
-                  null,
-                oldPrice:
-                  text('[data-auto="snippet-price-old"]') ?? text('[data-auto="old-price"]') ?? null,
-                imageSrc: image?.getAttribute('src') ?? null,
-                ratingText:
-                  text('[data-auto="rating-badge-value"]') ??
-                  text('[data-auto="reviews"] span') ??
-                  null,
-                reviewsText: text('[data-auto="reviews-count"]') ?? text('[data-auto="reviews"]'),
-                brand: text('[data-auto="brand-name"]') ?? null,
-                // Snippets embed inline hydration scripts; drop them from the text sample.
-                cardText: (text('[data-auto="snippet-title"]') ?? '') + ' ' + (text('[data-auto="delivery-wrapper"]') ?? ''),
-                outerHtml: card.outerHTML.slice(0, 2048),
-              };
-            }),
-        )
-        .catch(() => []);
+            return {
+              href: anchor?.getAttribute('href') ?? null,
+              zoneData: card.getAttribute('data-zone-data') ?? null,
+              productId:
+                card.getAttribute('data-product-id') ?? card.getAttribute('data-id') ?? null,
+              title:
+                text('[data-auto="snippet-title"]') ??
+                text('[data-zone-name="title"]') ??
+                text('h3') ??
+                image?.getAttribute('alt') ??
+                null,
+              price:
+                text('[data-auto="snippet-price-current"]') ??
+                text('[data-auto="price-value"]') ??
+                text('[data-auto="mainPrice"]') ??
+                null,
+              oldPrice:
+                text('[data-auto="snippet-price-old"]') ?? text('[data-auto="old-price"]') ?? null,
+              imageSrc: image?.getAttribute('src') ?? null,
+              ratingText:
+                text('[data-auto="rating-badge-value"]') ??
+                text('[data-auto="reviews"] span') ??
+                null,
+              reviewsText: text('[data-auto="reviews-count"]') ?? text('[data-auto="reviews"]'),
+              brand: text('[data-auto="brand-name"]') ?? null,
+              cardText: (text('[data-auto="snippet-title"]') ?? '') + ' ' + (text('[data-auto="delivery-wrapper"]') ?? ''),
+              outerHtml: card.outerHTML.slice(0, 2048),
+            };
+          }),
+      )
+      .catch(() => []);
 
-      const seenIds = new Set();
+    const domItems = rawCards
+      .map((card) => {
+        const productUrl = absoluteUrl(card.href);
+        const zoneData = parseZoneData(card.zoneData);
+        const externalId =
+          zoneData?.marketSku ??
+          zoneData?.modelId ??
+          zoneData?.wareId ??
+          card.productId ??
+          externalIdFromUrl(card.href);
+        const cleanTitle = (card.title ?? '').trim();
 
-      items = rawCards
-        .map((card) => {
-          const productUrl = absoluteUrl(card.href);
-          const zoneData = parseZoneData(card.zoneData);
-          const externalId =
-            zoneData?.marketSku ??
-            zoneData?.modelId ??
-            zoneData?.wareId ??
-            card.productId ??
-            externalIdFromUrl(card.href);
-          const cleanTitle = (card.title ?? '').trim();
+        if (!externalId || !cleanTitle || !productUrl) {
+          return null;
+        }
 
-          if (!externalId || !cleanTitle || !productUrl) {
-            return null;
-          }
+        const priceAmount = toKopecks(card.price);
+        const ratingValue = toFloat(card.ratingText);
 
-          const priceAmount = toKopecks(card.price);
-          const ratingValue = toFloat(card.ratingText);
+        return {
+          external_id: String(externalId),
+          title: cleanTitle,
+          brand: card.brand,
+          price_amount: priceAmount,
+          old_price_amount: toKopecks(card.oldPrice),
+          currency: 'RUB',
+          image_url: absoluteUrl(card.imageSrc),
+          product_url: productUrl,
+          rating_value: ratingValue !== null && ratingValue <= 5 ? ratingValue : null,
+          rating_count: toInt(card.reviewsText),
+          availability_status:
+            availabilityFrom(card.cardText) ?? (priceAmount ? 'in_stock' : null),
+          stock_quantity: null,
+          raw_payload: clipRaw(card.outerHtml),
+        };
+      })
+      .filter((item) => {
+        if (!item || seenIds.has(item.external_id)) {
+          return false;
+        }
+        seenIds.add(item.external_id);
 
-          return {
-            external_id: String(externalId),
-            title: cleanTitle,
-            brand: card.brand,
-            price_amount: priceAmount,
-            old_price_amount: toKopecks(card.oldPrice),
-            currency: 'RUB',
-            image_url: absoluteUrl(card.imageSrc),
-            product_url: productUrl,
-            rating_value: ratingValue !== null && ratingValue <= 5 ? ratingValue : null,
-            rating_count: toInt(card.reviewsText),
-            availability_status:
-              availabilityFrom(card.cardText) ?? (priceAmount ? 'in_stock' : null),
-            stock_quantity: null,
-            raw_payload: clipRaw(card.outerHtml),
-          };
-        })
-        .filter((item) => {
-          if (!item || seenIds.has(item.external_id)) {
-            return false;
-          }
-          seenIds.add(item.external_id);
+        return true;
+      });
 
-          return true;
-        });
+    items = items.concat(domItems);
 
-      if (items.length > 0) {
-        extractionMode = 'dom';
-      }
+    if (domItems.length > 0) {
+      extractionMode = extractionMode === 'flight_json' ? 'flight_json+dom' : 'dom';
     }
   } catch (error) {
     if (error?.code === 'ANTIBOT') {

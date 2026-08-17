@@ -42,8 +42,9 @@ class ResultAggregator
         $deduplicatedCount = count($sorted);
         $total = $this->totalFromProviderMeta($providerMeta) ?? $deduplicatedCount;
 
-        $offset = ($query->page - 1) * $query->perPage;
-        $page = array_values(array_slice($sorted, $offset, $query->perPage));
+        // Providers have already paginated their results based on the requested page.
+        // We only take the top N items from the merged set.
+        $page = array_values(array_slice($sorted, 0, $query->perPage));
 
         return new ProductSearchResult(
             items: $page,

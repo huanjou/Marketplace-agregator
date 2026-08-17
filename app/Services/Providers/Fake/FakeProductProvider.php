@@ -68,9 +68,7 @@ class FakeProductProvider implements ProductProviderInterface
     }
 
     /**
-     * Returns the FULL match set for the query — the page/perPage carried by
-     * the query are advisory only. Slicing is ResultAggregator's job, because
-     * only it sees the merged, globally sorted list across every provider.
+     * Returns the paginated match set for the query.
      */
     public function search(ProductSearchQuery $query): ProductSearchResult
     {
@@ -82,6 +80,9 @@ class FakeProductProvider implements ProductProviderInterface
         $matched = array_values($matched);
 
         $total = count($matched);
+
+        $offset = ($normalized->page - 1) * $normalized->perPage;
+        $matched = array_values(array_slice($matched, $offset, $normalized->perPage));
 
         return new ProductSearchResult(
             items: $matched,
