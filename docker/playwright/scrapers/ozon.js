@@ -219,6 +219,32 @@ function normalizeJsonEntry(entry) {
 }
 
 /**
+ * Visits the Ozon homepage first so the search request carries the cookies the
+ * antibot layer hands out there. Throws `{ code: 'ANTIBOT' }` when the homepage
+ * itself is blocked — no point spending the rest of the budget on /search.
+ */
+async function warmUpSession(page, budgetMs, elapsed) {
+  const response = await page.goto(BASE_URL + '/', {
+    waitUntil: 'domcontentloaded',
+    timeout: budgetMs,
+  });
+
+  const status = response?.status() ?? 0;
+
+  if (status === 403 || status === 429) {
+    throw {
+      code: 'ANTIBOT',
+      message: `Blocked with http ${status} (homepage warm-up)`,
+      took_ms: elapsed(),
+    };
+  }
+
+  // Let the client-side bootstrap run and look like a reader, not a fetcher.
+  await page.waitForTimeout(1500);
+  await page.mouse.wheel(0, 300).catch(() => null);
+}
+
+/**
  * Scrapes the Ozon search results page. JSON-first (`__NEXT_DATA__`), DOM fallback.
  * Throws `{ code: 'ANTIBOT' }` on captcha and `{ code: 'INTERNAL' }` for anything else.
  */
@@ -236,11 +262,14 @@ export async function scrape(page, { query, page: pageNum = 1, timeout_ms: timeo
   let items = [];
 
   try {
+    // Half the budget at most, so a slow homepage never starves the search step.
+    await warmUpSession(page, Math.min(10000, Math.max(2000, Math.round(timeoutMs / 2))), elapsed);
+
     // `commit` resolves as soon as response headers arrive, so a challenge page is
     // classified immediately instead of hanging until the navigation timeout.
     const response = await page.goto(url, {
       waitUntil: 'commit',
-      timeout: Math.max(1000, timeoutMs - 1000),
+      timeout: Math.max(1000, timeoutMs - elapsed() - 1000),
     });
 
     const status = response?.status() ?? 0;

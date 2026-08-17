@@ -1,7 +1,12 @@
-import { chromium } from 'playwright';
+import { chromium as playwrightChromium } from 'playwright-extra';
+import stealth from 'puppeteer-extra-plugin-stealth';
 
 const BLOCKED_RESOURCE_TYPES = new Set(['image', 'font', 'stylesheet', 'media']);
 const BLOCKED_URL_PATTERN = /mc\.yandex|top-fwz1|google-analytics|googletagmanager|facebook\.net|adservice|pixel/i;
+
+// Ozon's antibot fingerprints whether a client fetches the full asset set, so
+// images/CSS/fonts stay allowed there; every other host keeps the fast path.
+const FULL_ASSET_HOST_PATTERN = /ozon/i;
 
 const CONTEXT_OPTIONS = {
   locale: 'ru-RU',
@@ -21,9 +26,15 @@ const ACQUIRE_TIMEOUT_MS = Number(process.env.POOL_ACQUIRE_TIMEOUT_MS || 5000);
  * that cookie/storage state never grows unbounded.
  */
 export async function initPool({ size = 4, log = console } = {}) {
-  const browser = await chromium.launch({
+  playwrightChromium.use(stealth());
+
+  const browser = await playwrightChromium.launch({
     headless: true,
-    args: ['--disable-dev-shm-usage', '--no-sandbox'],
+    args: [
+      '--disable-dev-shm-usage',
+      '--no-sandbox',
+      '--disable-blink-features=AutomationControlled',
+    ],
   });
 
   /** @type {Array<{ context: import('playwright').BrowserContext, uses: number }>} */
@@ -39,12 +50,14 @@ export async function initPool({ size = 4, log = console } = {}) {
 
     await context.route('**/*', (route) => {
       const request = route.request();
+      const url = request.url();
 
-      if (BLOCKED_RESOURCE_TYPES.has(request.resourceType())) {
+      // Trackers are dead weight everywhere.
+      if (BLOCKED_URL_PATTERN.test(url)) {
         return route.abort();
       }
 
-      if (BLOCKED_URL_PATTERN.test(request.url())) {
+      if (BLOCKED_RESOURCE_TYPES.has(request.resourceType()) && !FULL_ASSET_HOST_PATTERN.test(url)) {
         return route.abort();
       }
 
