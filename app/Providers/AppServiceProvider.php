@@ -4,8 +4,7 @@ declare(strict_types=1);
 
 namespace App\Providers;
 
-use App\Http\Clients\OzonSellerClient;
-use App\Http\Clients\YandexMarketClient;
+use App\Http\Clients\PlaywrightScraperClient;
 use App\Services\ProviderRegistry;
 use App\Services\Providers\Fake\FakeProductProvider;
 use App\Services\Providers\Ozon\OzonProductProvider;
@@ -32,7 +31,7 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
-        $this->registerMarketplaceClients();
+        $this->registerScraperClient();
 
         foreach (self::PRODUCT_PROVIDER_CLASSES as $providerClass) {
             $this->app->singleton($providerClass);
@@ -54,21 +53,16 @@ class AppServiceProvider extends ServiceProvider
     }
 
     /**
-     * Marketplace HTTP clients take their credentials as a plain config array,
-     * so each one gets an explicit factory. Everything else in the provider
+     * Both scraping providers talk to the same Playwright service, so a single
+     * shared client is built from config here. Everything else in the provider
      * graph (mappers, rate-limit policies, post-processor) is autowirable.
      */
-    private function registerMarketplaceClients(): void
+    private function registerScraperClient(): void
     {
-        $this->app->singleton(OzonSellerClient::class, static function (Application $app): OzonSellerClient {
-            return new OzonSellerClient(
-                (array) $app['config']->get('marketplace.providers.ozon', [])
-            );
-        });
-
-        $this->app->singleton(YandexMarketClient::class, static function (Application $app): YandexMarketClient {
-            return new YandexMarketClient(
-                (array) $app['config']->get('marketplace.providers.yandex_market', [])
+        $this->app->singleton(PlaywrightScraperClient::class, static function (Application $app): PlaywrightScraperClient {
+            return new PlaywrightScraperClient(
+                baseUrl: (string) $app['config']->get('marketplace.playwright.base_url'),
+                timeoutMs: (int) $app['config']->get('marketplace.playwright.timeout_ms'),
             );
         });
     }

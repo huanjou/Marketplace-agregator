@@ -5,146 +5,126 @@ declare(strict_types=1);
 namespace App\Services\Providers\YandexMarket;
 
 use App\DTO\Marketplace\ExternalProductData;
+use App\DTO\Search\ProductSearchQuery;
 use App\Enums\Availability;
 use App\Enums\ProviderCode;
 
 /**
- * Translates a Yandex Market Partner API offer mapping into ExternalProductData.
+ * Maps raw Playwright scrape items (Yandex Market search results) into
+ * ExternalProductData DTOs.
  *
- * Endpoint & shape assumption
- * ---------------------------
- * Rows are the elements of `result.offerMappings[]` returned by
- * `POST /v2/businesses/{businessId}/offer-mappings`, each shaped as
- * `{"offer": {...}, "mapping": {...}}`. The fields consumed here are assumed
- * to be:
- *
- *   offer:   offerId, name, vendor, description, category, pictures[],
- *            basicPrice{value,currencyId,discountBase}, archived, cardStatus
- *   mapping: marketSku, marketSkuName, marketCategoryId, marketCategoryName
- *
- * These names were NOT verified against a live partner account, therefore every
- * access is null-tolerant and an unexpected shape degrades to a sparse DTO
- * rather than an exception. A smoke test against real credentials is required
- * before this mapper is trusted in production.
- *
- * Note that the partner API describes the seller's own catalogue and returns no
- * public storefront URL; one is synthesised from `marketSku` when available.
+ * Each item in the scrape response follows this contract:
+ *   external_id, title, brand, price_amount (kopecks), old_price_amount,
+ *   currency, image_url, product_url, rating_value, rating_count,
+ *   availability_status, stock_quantity, raw_payload.
  */
 class YandexMarketProductMapper
 {
-    private const PRODUCT_BASE_URL = 'https://market.yandex.ru/product/';
-
     /**
-     * @param array<string, mixed> $yandexOffer An offer mapping row, or a bare offer.
+     * Map an array of raw scrape items into ExternalProductData DTOs.
+     *
+     * @param  array<int, array<string, mixed>>  $rawItems
+     * @return ExternalProductData[]
      */
-    public function map(array $yandexOffer): ExternalProductData
+    public function mapMany(array $rawItems, ProductSearchQuery $query): array
     {
-        $offer = is_array($yandexOffer['offer'] ?? null) ? $yandexOffer['offer'] : $yandexOffer;
-        $mapping = is_array($yandexOffer['mapping'] ?? null) ? $yandexOffer['mapping'] : [];
+        $items = [];
 
-        $offerId = $this->stringOrNull($offer['offerId'] ?? $offer['shopSku'] ?? null);
-        $marketSku = $this->stringOrNull($mapping['marketSku'] ?? null);
-        $price = is_array($offer['basicPrice'] ?? null) ? $offer['basicPrice'] : [];
+        foreach ($rawItems as $raw) {
+            if (! is_array($raw)) {
+                continue;
+            }
 
-        return new ExternalProductData(
-            providerCode: ProviderCode::YandexMarket->value,
-            externalProductId: $marketSku ?? $offerId,
-            externalOfferId: $offerId,
-            title: $this->title($offer, $mapping),
-            brand: $this->stringOrNull($offer['vendor'] ?? null),
-            description: $this->stringOrNull($offer['description'] ?? null),
-            priceAmount: $this->minorUnits($price['value'] ?? null),
-            oldPriceAmount: $this->minorUnits($price['discountBase'] ?? null),
-            currency: $this->currency($price),
-            categoryExternalId: $this->stringOrNull(
-                $offer['category'] ?? $offer['marketCategoryId'] ?? $mapping['marketCategoryId'] ?? null
-            ),
-            categoryName: $this->stringOrNull($mapping['marketCategoryName'] ?? null),
-            imageUrls: $this->imageUrls($offer),
-            productUrl: $marketSku !== null ? self::PRODUCT_BASE_URL . $marketSku : null,
-            availabilityStatus: $this->availability($offer),
-            stockQuantity: null, // Offer mappings carry no stock; warehouse stocks live on a separate endpoint.
-            ratingValue: null,
-            ratingCount: null,
-            rawPayload: $yandexOffer,
-        );
+            $mapped = $this->mapOne($raw);
+
+            if ($mapped !== null) {
+                $items[] = $mapped;
+            }
+        }
+
+        return $items;
     }
 
     /**
-     * @param array<string, mixed> $offer
-     * @param array<string, mixed> $mapping
+     * @param  array<string, mixed>  $raw
      */
-    private function title(array $offer, array $mapping): string
+    private function mapOne(array $raw): ?ExternalProductData
     {
-        $title = $this->stringOrNull($offer['name'] ?? null)
-            ?? $this->stringOrNull($mapping['marketSkuName'] ?? null);
+        $title = trim((string) ($raw['title'] ?? ''));
+        $externalId = $this->resolveExternalId($raw);
 
-        return $title ?? '';
-    }
-
-    /**
-     * Prices arrive as numbers or numeric strings in major units.
-     */
-    private function minorUnits(mixed $value): ?int
-    {
-        if ($value === null || $value === '' || ! is_numeric($value)) {
+        if ($title === '' || $externalId === '') {
             return null;
         }
 
-        $amount = (int) round((float) $value * 100);
-
-        return $amount > 0 ? $amount : null;
+        return new ExternalProductData(
+            providerCode: ProviderCode::YandexMarket->value,
+            externalProductId: $externalId,
+            externalOfferId: null,
+            title: $title,
+            brand: $this->stringOrNull($raw['brand'] ?? null),
+            description: null,
+            priceAmount: $this->intOrNull($raw['price_amount'] ?? null),
+            oldPriceAmount: $this->intOrNull($raw['old_price_amount'] ?? null),
+            currency: $this->resolveCurrency($raw),
+            categoryExternalId: null,
+            categoryName: null,
+            imageUrls: $this->resolveImageUrls($raw),
+            productUrl: $this->stringOrNull($raw['product_url'] ?? null),
+            availabilityStatus: $this->resolveAvailability($raw),
+            stockQuantity: $this->intOrNull($raw['stock_quantity'] ?? null),
+            ratingValue: $this->floatOrNull($raw['rating_value'] ?? null),
+            ratingCount: $this->intOrNull($raw['rating_count'] ?? null),
+            rawPayload: $raw,
+        );
     }
 
-    /**
-     * @param array<string, mixed> $price
-     */
-    private function currency(array $price): string
+    private function resolveExternalId(array $raw): string
     {
-        $currency = trim((string) ($price['currencyId'] ?? ''));
+        $id = trim((string) ($raw['external_id'] ?? ''));
+
+        if ($id !== '') {
+            return $id;
+        }
+
+        // Fallback: deterministic id from product_url or title
+        $seed = $raw['product_url'] ?? $raw['title'] ?? '';
+
+        return $seed !== '' ? 'yandex:' . md5((string) $seed) : '';
+    }
+
+    private function resolveCurrency(array $raw): string
+    {
+        $currency = trim((string) ($raw['currency'] ?? ''));
 
         return $currency !== '' ? mb_strtoupper($currency) : 'RUB';
     }
 
     /**
-     * @param array<string, mixed> $offer
      * @return string[]
      */
-    private function imageUrls(array $offer): array
+    private function resolveImageUrls(array $raw): array
     {
-        $pictures = $offer['pictures'] ?? null;
+        $url = $this->stringOrNull($raw['image_url'] ?? null);
 
-        if (! is_array($pictures)) {
-            return [];
-        }
-
-        $urls = [];
-
-        foreach ($pictures as $picture) {
-            $url = is_array($picture)
-                ? $this->stringOrNull($picture['url'] ?? null)
-                : $this->stringOrNull($picture);
-
-            if ($url !== null) {
-                $urls[] = $url;
-            }
-        }
-
-        return array_values(array_unique($urls));
+        return $url !== null ? [$url] : [];
     }
 
-    /**
-     * @param array<string, mixed> $offer
-     */
-    private function availability(array $offer): string
+    private function resolveAvailability(array $raw): ?string
     {
-        if (($offer['archived'] ?? false) === true) {
-            return Availability::Archived->value;
+        $status = $this->stringOrNull($raw['availability_status'] ?? null);
+
+        if ($status === null) {
+            return null;
         }
 
-        // Without a stocks call the sellability of an offer is unknown; the
-        // card status only tells us how far moderation got.
-        return Availability::Unknown->value;
+        // Normalize known statuses to our enum values
+        return match (mb_strtolower($status)) {
+            'in_stock', 'instock' => Availability::InStock->value,
+            'out_of_stock', 'outofstock' => Availability::OutOfStock->value,
+            'archived' => Availability::Archived->value,
+            default => $status,
+        };
     }
 
     private function stringOrNull(mixed $value): ?string
@@ -156,5 +136,15 @@ class YandexMarketProductMapper
         $value = trim((string) $value);
 
         return $value !== '' ? $value : null;
+    }
+
+    private function intOrNull(mixed $value): ?int
+    {
+        return is_numeric($value) ? (int) $value : null;
+    }
+
+    private function floatOrNull(mixed $value): ?float
+    {
+        return is_numeric($value) ? (float) $value : null;
     }
 }

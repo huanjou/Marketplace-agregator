@@ -5,11 +5,27 @@ declare(strict_types=1);
 return [
     /*
     |--------------------------------------------------------------------------
+    | Playwright Scraping Service
+    |--------------------------------------------------------------------------
+    |
+    | Ozon and Yandex Market data is collected by scraping their public
+    | search pages through the in-cluster Playwright service, which the
+    | providers reach over HTTP via PlaywrightScraperClient.
+    |
+    */
+
+    'playwright' => [
+        'base_url' => env('PLAYWRIGHT_URL', 'http://playwright:3000'),
+        'timeout_ms' => (int) env('PLAYWRIGHT_TIMEOUT_MS', 10000),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Marketplace Providers
     |--------------------------------------------------------------------------
     |
     | Every provider is described by its concrete implementation class,
-    | an enabled flag and provider-specific credentials. The concrete
+    | an enabled flag and provider-specific settings. The concrete
     | provider classes are resolved from the service container and
     | registered via the ProviderRegistry (see AppServiceProvider).
     |
@@ -26,25 +42,20 @@ return [
 
         'ozon' => [
             'class' => \App\Services\Providers\Ozon\OzonProductProvider::class,
-            'enabled' => env('MARKETPLACE_OZON_ENABLED', false),
+            'enabled' => env('MARKETPLACE_OZON_ENABLED', true),
             'display_name' => 'Ozon',
-            'client_id' => env('OZON_CLIENT_ID'),
-            'api_key' => env('OZON_API_KEY'),
-            'base_url' => env('OZON_BASE_URL', 'https://api-seller.ozon.ru'),
-            'rate_limit_per_minute' => 2400,
-            'cache_ttl_seconds' => 300,
+            'search_url_template' => env('OZON_SEARCH_URL', 'https://www.ozon.ru/search/?text={query}'),
+            'rate_limit_per_minute' => (int) env('OZON_RATE_LIMIT_PER_MINUTE', 30),
+            'cache_ttl_seconds' => (int) env('OZON_CACHE_TTL_SECONDS', 900),
         ],
 
         'yandex_market' => [
             'class' => \App\Services\Providers\YandexMarket\YandexMarketProductProvider::class,
-            'enabled' => env('MARKETPLACE_YANDEX_ENABLED', false),
+            'enabled' => env('MARKETPLACE_YANDEX_MARKET_ENABLED', true),
             'display_name' => 'Yandex Market',
-            'api_key' => env('YANDEX_MARKET_API_KEY'),
-            'business_id' => env('YANDEX_MARKET_BUSINESS_ID'),
-            'campaign_id' => env('YANDEX_MARKET_CAMPAIGN_ID'),
-            'base_url' => env('YANDEX_MARKET_BASE_URL', 'https://api.partner.market.yandex.ru'),
-            'rate_limit_per_minute' => 100,
-            'cache_ttl_seconds' => 300,
+            'search_url_template' => env('YANDEX_SEARCH_URL', 'https://market.yandex.ru/search?text={query}'),
+            'rate_limit_per_minute' => (int) env('YANDEX_MARKET_RATE_LIMIT_PER_MINUTE', 30),
+            'cache_ttl_seconds' => (int) env('YANDEX_MARKET_CACHE_TTL_SECONDS', 900),
         ],
     ],
 
@@ -58,7 +69,7 @@ return [
         'default_timeout_ms' => 5000,
         'default_per_page' => 20,
         'max_per_page' => 100,
-        'cache_ttl_seconds' => 300,
+        'cache_ttl_seconds' => 900,
         'cache_prefix' => 'product-search',
     ],
 ];

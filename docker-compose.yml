@@ -30,6 +30,34 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      playwright:
+        condition: service_healthy
+    networks:
+      - agregator
+
+  playwright:
+    build:
+      context: ./docker/playwright
+      dockerfile: Dockerfile
+    image: agregator-playwright
+    container_name: agregator-playwright
+    restart: unless-stopped
+    environment:
+      POOL_SIZE: 4
+      PORT: 3000
+      NODE_ENV: production
+      LOG_LEVEL: info
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '2.0'
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
     networks:
       - agregator
 

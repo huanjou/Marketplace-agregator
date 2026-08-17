@@ -10,49 +10,48 @@ use App\DTO\Marketplace\ProviderCapabilityData;
 use App\DTO\Marketplace\ProviderHealthData;
 use App\DTO\Search\ProductSearchQuery;
 use App\DTO\Search\ProductSearchResult;
-use App\Enums\Availability;
 use App\Enums\ProviderCode;
 use App\Enums\SearchSortField;
-use App\Exceptions\ProviderAuthenticationException;
-use App\Http\Clients\OzonSellerClient;
-use App\Services\Providers\Support\ProviderResultPostProcessor;
+use App\Exceptions\ProviderUnavailableException;
+use App\Http\Clients\PlaywrightScraperClient;
+use App\Models\SyncLog;
+use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\Log;
 use Throwable;
 
 /**
- * Ozon Seller API provider.
+ * Ozon provider backed by the Playwright scraping service.
  *
- * The seller API is a catalogue API, not a search engine: `/v3/product/list`
- * returns ids for the seller's own products with no free-text query, and
- * `/v2/product/info/list` enriches those ids with names, prices and images.
- * Text matching, rating and brand filtering therefore happen locally, after
- * the fetch (see ProviderResultPostProcessor).
+ * The public search page (`https://www.ozon.ru/search/?text=...`) is rendered by
+ * the in-cluster Playwright service, which extracts the product tiles and hands
+ * back normalised snake_case dicts. Unlike the previous Seller-API integration
+ * this IS a real search engine: the free-text query is pushed down to Ozon and
+ * relevance is theirs, so no local text matching happens here.
  *
- * READ-ONLY: only the two listing/info endpoints above are ever called. No
- * endpoint that creates, updates, prices, blocks or archives seller data is
- * reachable from this class.
+ * READ-ONLY: the scraper only ever performs GET navigations to public search
+ * pages. Nothing in this class can create, update or price anything on Ozon.
  */
 class OzonProductProvider implements ProductProviderInterface
 {
-    private const PRODUCT_LIST_ENDPOINT = '/v3/product/list';
+    /**
+     * One scraped search page holds ~36 tiles; asking for more would need
+     * several navigations, which the scraper does not do per request.
+     */
+    private const MAX_RESULTS_PER_PAGE = 36;
 
-    private const PRODUCT_INFO_ENDPOINT = '/v2/product/info/list';
+    /** Budget for a search scrape: page load + extraction. */
+    private const SEARCH_TIMEOUT_MS = 8000;
 
-    private const MAX_RESULTS_PER_PAGE = 100;
+    /** Health probes get a shorter budget so a slow site fails fast. */
+    private const HEALTH_TIMEOUT_MS = 5000;
 
-    /** Hard ceiling on ids pulled per search, protecting latency and quota. */
-    private const MAX_FETCH_LIMIT = 500;
-
-    /** Ids per `/v2/product/info/list` call. */
-    private const INFO_BATCH_SIZE = 100;
-
-    private const HEALTH_TIMEOUT_MS = 3000;
+    /** Cheap, always-populated query used as the health canary. */
+    private const HEALTH_CANARY_QUERY = 'test';
 
     public function __construct(
-        private readonly OzonSellerClient $client,
+        private readonly PlaywrightScraperClient $scraper,
         private readonly OzonRateLimitPolicy $rateLimit,
         private readonly OzonProductMapper $mapper,
-        private readonly ProviderResultPostProcessor $postProcessor,
     ) {}
 
     public function code(): string
@@ -65,19 +64,23 @@ class OzonProductProvider implements ProductProviderInterface
         return (string) config('marketplace.providers.ozon.display_name', 'Ozon');
     }
 
+    /**
+     * Only free-text search is pushed down (to Ozon's own search engine); the
+     * sorts below are applied globally by ResultAggregator across providers.
+     * Structural filters (price range, brand, availability) are NOT honoured on
+     * the scraping path — the search page exposes them as URL facets we do not
+     * build yet, so they are deliberately not advertised.
+     */
     public function capabilities(): ProviderCapabilityData
     {
         return new ProviderCapabilityData(
             supportedFilters: [
-                'price_range',
-                'category',
-                'brand',
-                'availability',
+                'text_search',
             ],
             supportedSorts: [
+                SearchSortField::Relevance->value,
                 SearchSortField::PriceAsc->value,
                 SearchSortField::PriceDesc->value,
-                SearchSortField::Relevance->value,
             ],
             supportsPagination: true,
             maxResultsPerPage: self::MAX_RESULTS_PER_PAGE,
@@ -86,19 +89,23 @@ class OzonProductProvider implements ProductProviderInterface
     }
 
     /**
-     * Missing credentials disable the provider instead of failing searches:
-     * the aggregator simply skips it.
+     * A down Playwright service disables the provider instead of failing
+     * searches: the aggregator simply skips it. The reachability verdict is
+     * cached for 30 seconds inside the client, so a search burst pings the
+     * service at most once.
      */
     public function isEnabled(): bool
     {
         return (bool) config('marketplace.providers.ozon.enabled', false)
-            && $this->client->isConfigured();
+            && $this->scraper->isReachable();
     }
 
     public function search(ProductSearchQuery $query): ProductSearchResult
     {
+        // ProductSearchService already filters on isEnabled(); this guard keeps
+        // direct callers (jobs, tinker) from hitting a dead scraper.
         if (! $this->isEnabled()) {
-            return $this->emptyResult('disabled');
+            return $this->emptyResult('skipped', ['skipped' => 'disabled_or_unreachable']);
         }
 
         $query = $query->normalized();
@@ -106,284 +113,150 @@ class OzonProductProvider implements ProductProviderInterface
         return $this->rateLimit->attempt(fn (): ProductSearchResult => $this->performSearch($query));
     }
 
+    /**
+     * Public search pages carry no stable, queryable product id: reaching
+     * `https://www.ozon.ru/product/{id}` requires a second navigation per
+     * product and returns a different DOM than the search tiles. Refresh flows
+     * therefore treat Ozon offers as search-only; a dedicated product scraper
+     * can be added later behind this method.
+     */
     public function fetchByExternalId(string $externalId): ?ExternalProductData
     {
-        if (! $this->isEnabled()) {
-            return null;
-        }
-
-        return $this->rateLimit->attempt(function () use ($externalId): ?ExternalProductData {
-            $response = $this->client->postJson(
-                self::PRODUCT_INFO_ENDPOINT,
-                $this->infoPayloadFor($externalId),
-                (int) config('marketplace.search.default_timeout_ms', 5000),
-            );
-
-            $row = $this->infoRows($response)[0] ?? null;
-
-            return is_array($row) ? $this->mapper->map($row) : null;
-        });
+        return null;
     }
 
     public function healthCheck(): ProviderHealthData
     {
-        if (! $this->client->isConfigured()) {
-            return $this->health('down', null, 'not_configured');
+        if (! $this->scraper->isReachable()) {
+            return $this->health('down', null, 'Playwright service unreachable');
         }
 
-        $startedAt = microtime(true);
+        $startedAtMs = microtime(true);
 
         try {
-            $this->client->postJson(
-                self::PRODUCT_LIST_ENDPOINT,
-                ['filter' => ['visibility' => 'ALL'], 'limit' => 1],
+            $response = $this->scraper->scrape(
+                $this->code(),
+                self::HEALTH_CANARY_QUERY,
+                1,
                 self::HEALTH_TIMEOUT_MS,
             );
-
-            return $this->health('healthy', $this->elapsedMs($startedAt));
-        } catch (ProviderAuthenticationException) {
-            return $this->health('down', $this->elapsedMs($startedAt), 'auth_failed');
+        } catch (ProviderUnavailableException $e) {
+            return $this->health('down', $this->elapsedMs($startedAtMs), mb_substr($e->getMessage(), 0, 500));
         } catch (Throwable $e) {
+            return $this->health('degraded', $this->elapsedMs($startedAtMs), mb_substr($e->getMessage(), 0, 500));
+        }
+
+        // A reachable scraper that extracts nothing means the page rendered but
+        // the tiles did not: either an antibot wall or DOM drift.
+        if ($response->items === []) {
             return $this->health(
                 'degraded',
-                $this->elapsedMs($startedAt),
-                mb_substr($e->getMessage(), 0, 500),
+                $this->elapsedMs($startedAtMs),
+                'Zero items returned — possible antibot block',
             );
         }
+
+        return $this->health('healthy', $this->elapsedMs($startedAtMs));
     }
 
     private function performSearch(ProductSearchQuery $query): ProductSearchResult
     {
-        $startedAt = microtime(true);
-        $fetchLimit = $this->fetchLimit($query);
+        $startedAt = CarbonImmutable::now();
+        $startedAtMs = microtime(true);
 
-        // The two calls below are strictly dependent: ids first, details second.
-        // Pooling them with Http::pool() would therefore buy nothing here. The
-        // parallelism worth having is one level up — several marketplaces
-        // queried at once — and one level down, where the info batches of a very
-        // large page could be pooled. Both are left as future work so error
-        // translation stays in a single place (the client).
-        $list = $this->client->postJson(self::PRODUCT_LIST_ENDPOINT, [
-            'filter' => $this->listFilter($query),
-            'limit' => $fetchLimit,
-        ], $query->timeoutMs);
+        try {
+            $response = $this->scraper->scrape(
+                $this->code(),
+                $query->text,
+                $query->page,
+                self::SEARCH_TIMEOUT_MS,
+            );
 
-        $listResult = is_array($list['result'] ?? null) ? $list['result'] : [];
-        $listItems = is_array($listResult['items'] ?? null) ? $listResult['items'] : [];
-        $nextCursor = $this->nonEmptyString($listResult['last_id'] ?? null);
-        $catalogueTotal = is_numeric($listResult['total'] ?? null) ? (int) $listResult['total'] : null;
+            $items = $this->mapper->mapMany($response->items, $query);
+            $durationMs = $this->elapsedMs($startedAtMs);
 
-        if ($listItems === []) {
-            return $this->emptyResult('succeeded', [
-                'took_ms' => $this->elapsedMs($startedAt),
-                'returned' => 0,
-                'fetched' => 0,
-                'catalogue_total' => $catalogueTotal,
+            // The whole match set of the scraped page is returned: slicing the
+            // exact page is ResultAggregator's job, since it has to do so
+            // across all providers at once.
+            $result = new ProductSearchResult(
+                items: $items,
+                total: (int) ($response->meta['total_hint'] ?? count($items)),
+                nextCursor: null,
+                providerMeta: [
+                    $this->code() => array_merge($response->meta, [
+                        'status' => 'succeeded',
+                        'returned' => count($items),
+                        'took_ms' => $durationMs,
+                    ]),
+                ],
+            );
+
+            $this->writeSyncLog([
+                'operation' => 'search',
+                'status' => 'succeeded',
+                'started_at' => $startedAt,
+                'finished_at' => CarbonImmutable::now(),
+                'duration_ms' => $durationMs,
+                'request_summary' => $this->requestSummary($query),
+                'response_summary' => [
+                    'returned' => count($items),
+                    'scraped' => count($response->items),
+                    'total_hint' => $result->total,
+                    'extraction_mode' => $response->extractionMode(),
+                    'scraper_took_ms' => $response->tookMs(),
+                ],
+            ]);
+
+            return $result;
+        } catch (Throwable $e) {
+            // ProductSearchService isolates the provider and records its own
+            // failure row; this one additionally carries the scraper detail
+            // (timeouts, ANTIBOT codes) that only this layer sees.
+            $this->writeSyncLog([
+                'operation' => 'search',
+                'status' => 'failed',
+                'started_at' => $startedAt,
+                'finished_at' => CarbonImmutable::now(),
+                'duration_ms' => $this->elapsedMs($startedAtMs),
+                'request_summary' => $this->requestSummary($query),
+                'error_class' => $e::class,
+                'error_message' => mb_substr($e->getMessage(), 0, 2000),
+            ]);
+
+            throw $e;
+        }
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function requestSummary(ProductSearchQuery $query): array
+    {
+        return [
+            'text' => $query->text,
+            'page' => $query->page,
+            'per_page' => $query->perPage,
+            'timeout_ms' => self::SEARCH_TIMEOUT_MS,
+            'transport' => 'playwright',
+        ];
+    }
+
+    /**
+     * Audit trail writes are never allowed to break a search.
+     *
+     * @param array<string, mixed> $attributes
+     */
+    private function writeSyncLog(array $attributes): void
+    {
+        try {
+            SyncLog::query()->create(array_merge(['provider_code' => $this->code()], $attributes));
+        } catch (Throwable $e) {
+            Log::warning('Failed to write Ozon search sync log.', [
+                'provider_code' => $this->code(),
+                'exception' => $e::class,
+                'message' => $e->getMessage(),
             ]);
         }
-
-        $items = $this->mapRows($this->fetchDetails($listItems, $query->timeoutMs));
-
-        // The window covering the requested page is returned whole: slicing the
-        // exact page is ResultAggregator's job, since it has to do so across all
-        // providers at once (see its "pre-pagination items" contract).
-        $matched = $this->postProcessor->sort(
-            $this->postProcessor->filter($items, $query),
-            $query
-        );
-
-        return new ProductSearchResult(
-            items: $matched,
-            total: count($matched),
-            nextCursor: $nextCursor,
-            providerMeta: [
-                $this->code() => [
-                    'status' => 'succeeded',
-                    'took_ms' => $this->elapsedMs($startedAt),
-                    'returned' => count($matched),
-                    'fetched' => count($items),
-                    'catalogue_total' => $catalogueTotal,
-                ],
-            ],
-        );
-    }
-
-    /**
-     * Enrich the id rows from `/v3/product/list` with `/v2/product/info/list`
-     * details, keeping the stock/archive flags that only the list call carries.
-     *
-     * @param array<int, mixed> $listItems
-     * @return array<int, array<string, mixed>>
-     */
-    private function fetchDetails(array $listItems, int $timeoutMs): array
-    {
-        $listRowsById = [];
-
-        foreach ($listItems as $listItem) {
-            if (! is_array($listItem)) {
-                continue;
-            }
-
-            $productId = $listItem['product_id'] ?? null;
-
-            if (! is_numeric($productId)) {
-                continue;
-            }
-
-            $listRowsById[(string) $productId] = $this->withStockFlag($listItem);
-        }
-
-        if ($listRowsById === []) {
-            return [];
-        }
-
-        $rows = [];
-
-        foreach (array_chunk(array_keys($listRowsById), self::INFO_BATCH_SIZE) as $batch) {
-            $response = $this->client->postJson(self::PRODUCT_INFO_ENDPOINT, [
-                'product_id' => array_map('intval', $batch),
-            ], $timeoutMs);
-
-            foreach ($this->infoRows($response) as $row) {
-                if (! is_array($row)) {
-                    continue;
-                }
-
-                $productId = (string) ($row['product_id'] ?? $row['id'] ?? '');
-                $rows[] = array_merge($listRowsById[$productId] ?? [], $row);
-                unset($listRowsById[$productId]);
-            }
-        }
-
-        // Products the info call did not return still carry usable list data.
-        foreach ($listRowsById as $orphan) {
-            $rows[] = $orphan;
-        }
-
-        return $rows;
-    }
-
-    /**
-     * `/v3/product/list` reports stock per scheme; the mapper only needs to
-     * know whether anything is sellable at all.
-     *
-     * @param array<string, mixed> $listItem
-     * @return array<string, mixed>
-     */
-    private function withStockFlag(array $listItem): array
-    {
-        $fbo = $listItem['has_fbo_stocks'] ?? null;
-        $fbs = $listItem['has_fbs_stocks'] ?? null;
-
-        if (is_bool($fbo) || is_bool($fbs)) {
-            $listItem['has_stocks'] = ($fbo === true) || ($fbs === true);
-        }
-
-        return $listItem;
-    }
-
-    /**
-     * @param array<int, array<string, mixed>> $rows
-     * @return ExternalProductData[]
-     */
-    private function mapRows(array $rows): array
-    {
-        $items = [];
-
-        foreach ($rows as $row) {
-            try {
-                $items[] = $this->mapper->map($row);
-            } catch (Throwable $e) {
-                Log::warning('Skipped an unmappable Ozon product row.', [
-                    'provider_code' => $this->code(),
-                    'exception' => $e::class,
-                    'message' => $e->getMessage(),
-                    'product_id' => $row['product_id'] ?? null,
-                ]);
-            }
-        }
-
-        return $items;
-    }
-
-    /**
-     * The list endpoint only filters by visibility, offer id and product id, so
-     * availability is the single query filter that can be pushed down.
-     *
-     * Visibility values are an assumption pending a live smoke test; an unknown
-     * value would make Ozon reject the request, hence the conservative default.
-     *
-     * @return array<string, mixed>
-     */
-    private function listFilter(ProductSearchQuery $query): array
-    {
-        $visibility = match ($query->filters->availability) {
-            Availability::InStock->value => 'IN_SALE',
-            Availability::OutOfStock->value => 'EMPTY_STOCK',
-            Availability::Archived->value => 'ARCHIVED',
-            default => 'ALL',
-        };
-
-        return ['visibility' => $visibility];
-    }
-
-    /**
-     * Ozon paginates by `last_id` cursor while this application paginates by
-     * page number, so one call fetches a window wide enough to cover the
-     * requested page; the aggregator slices it. Deep pages are capped by
-     * MAX_FETCH_LIMIT.
-     */
-    private function fetchLimit(ProductSearchQuery $query): int
-    {
-        $perPage = min($query->perPage, self::MAX_RESULTS_PER_PAGE);
-
-        return min(self::MAX_FETCH_LIMIT, max($perPage, $perPage * $query->page));
-    }
-
-    /**
-     * Numeric ids are Ozon product ids; anything else is treated as a seller
-     * offer id, which the same endpoint accepts.
-     *
-     * @return array<string, mixed>
-     */
-    private function infoPayloadFor(string $externalId): array
-    {
-        return is_numeric($externalId)
-            ? ['product_id' => [(int) $externalId]]
-            : ['offer_id' => [$externalId]];
-    }
-
-    /**
-     * Tolerates both `result.items[]` and a bare `items[]` envelope, and the
-     * single-object `result` shape of older revisions.
-     *
-     * @param array<string, mixed> $response
-     * @return array<int, mixed>
-     */
-    private function infoRows(array $response): array
-    {
-        $result = $response['result'] ?? null;
-
-        if (is_array($result)) {
-            if (is_array($result['items'] ?? null)) {
-                return array_values($result['items']);
-            }
-
-            if (array_key_exists('product_id', $result) || array_key_exists('offer_id', $result)) {
-                return [$result];
-            }
-        }
-
-        if (is_array($response['items'] ?? null)) {
-            return array_values($response['items']);
-        }
-
-        Log::warning('Unexpected Ozon product info envelope.', [
-            'provider_code' => $this->code(),
-            'keys' => array_keys($response),
-        ]);
-
-        return [];
     }
 
     /**
@@ -412,19 +285,8 @@ class OzonProductProvider implements ProductProviderInterface
         );
     }
 
-    private function nonEmptyString(mixed $value): ?string
+    private function elapsedMs(float $startedAtMs): int
     {
-        if (! is_string($value) && ! is_numeric($value)) {
-            return null;
-        }
-
-        $value = trim((string) $value);
-
-        return $value !== '' ? $value : null;
-    }
-
-    private function elapsedMs(float $startedAt): int
-    {
-        return (int) round((microtime(true) - $startedAt) * 1000);
+        return (int) round((microtime(true) - $startedAtMs) * 1000);
     }
 }

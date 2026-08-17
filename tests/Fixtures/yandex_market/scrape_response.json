@@ -1,0 +1,100 @@
+{
+    "items": [
+        {
+            "external_id": "1456789012",
+            "title": "Смартфон Samsung Galaxy A54 5G 8/128 ГБ, чёрный",
+            "brand": "Samsung",
+            "price_amount": 2899900,
+            "old_price_amount": 3499900,
+            "currency": "RUB",
+            "image_url": "https://avatars.mds.yandex.net/get-mpic/12345/img_id_samsung_a54/orig",
+            "product_url": "https://market.yandex.ru/product/1456789012",
+            "rating_value": 4.7,
+            "rating_count": 1823,
+            "availability_status": "in_stock",
+            "stock_quantity": 42,
+            "raw_payload": {
+                "delivery_info": "Доставка завтра",
+                "seller": "МегаМаркет"
+            }
+        },
+        {
+            "external_id": "9876543210",
+            "title": "Наушники Apple AirPods Pro 2 (USB-C)",
+            "brand": "Apple",
+            "price_amount": 1989900,
+            "old_price_amount": null,
+            "currency": "RUB",
+            "image_url": "https://avatars.mds.yandex.net/get-mpic/67890/img_id_airpods_pro2/orig",
+            "product_url": "https://market.yandex.ru/product/9876543210",
+            "rating_value": null,
+            "rating_count": null,
+            "availability_status": null,
+            "stock_quantity": null,
+            "raw_payload": {
+                "delivery_info": "Доставка 2–3 дня",
+                "seller": "re:Store"
+            }
+        },
+        {
+            "external_id": "5551234567",
+            "title": "Робот-пылесос Xiaomi Roborock S8 Pro Ultra",
+            "brand": "Xiaomi",
+            "price_amount": 7499000,
+            "old_price_amount": null,
+            "currency": "RUB",
+            "image_url": "https://avatars.mds.yandex.net/get-mpic/11111/img_id_roborock_s8/orig",
+            "product_url": "https://market.yandex.ru/product/5551234567",
+            "rating_value": 4.9,
+            "rating_count": 456,
+            "availability_status": "in_stock",
+            "stock_quantity": 7,
+            "raw_payload": {
+                "delivery_info": "Доставка послезавтра",
+                "seller": "Xiaomi Official"
+            }
+        },
+        {
+            "external_id": "3332109876",
+            "title": "Телевизор LG OLED55C3 55\" 4K UHD Smart TV",
+            "brand": "LG",
+            "price_amount": 8999900,
+            "old_price_amount": 12999900,
+            "currency": "RUB",
+            "image_url": "https://avatars.mds.yandex.net/get-mpic/22222/img_id_lg_oled55c3/orig",
+            "product_url": "https://market.yandex.ru/product/3332109876",
+            "rating_value": 4.8,
+            "rating_count": 312,
+            "availability_status": "out_of_stock",
+            "stock_quantity": 0,
+            "raw_payload": {
+                "delivery_info": "Нет в наличии",
+                "seller": "LG Brand Store"
+            }
+        },
+        {
+            "external_id": "7778889990",
+            "title": "Кроссовки Nike Air Max 90, белые, размер 43",
+            "brand": "Nike",
+            "price_amount": 1299900,
+            "old_price_amount": null,
+            "currency": "RUB",
+            "image_url": "https://avatars.mds.yandex.net/get-mpic/33333/img_id_nike_am90/orig",
+            "product_url": "https://market.yandex.ru/product/7778889990",
+            "rating_value": 4.5,
+            "rating_count": 89,
+            "availability_status": "in_stock",
+            "stock_quantity": 15,
+            "raw_payload": {
+                "delivery_info": "Доставка завтра",
+                "seller": "Спортмастер"
+            }
+        }
+    ],
+    "meta": {
+        "provider": "yandex_market",
+        "took_ms": 3120,
+        "extraction_mode": "next_data",
+        "total_hint": 2418
+    }
+}

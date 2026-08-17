@@ -1,0 +1,88 @@
+{
+  "items": [
+    {
+      "external_id": "1512345678",
+      "title": "Компьютер игровой ARDOR GAMING Neon MG100 (Ryzen 5 5600, 16 ГБ, 512 ГБ SSD, RTX 4060)",
+      "brand": "ARDOR GAMING",
+      "price_amount": 8499000,
+      "old_price_amount": 10299000,
+      "currency": "RUB",
+      "image_url": "https://cdn1.ozone.ru/s3/multimedia-1-t/7012345678.jpg",
+      "product_url": "https://www.ozon.ru/product/kompyuter-igrovoy-ardor-gaming-neon-mg100-1512345678/",
+      "rating_value": 4.8,
+      "rating_count": 431,
+      "availability_status": "in_stock",
+      "stock_quantity": 17,
+      "raw_payload": {
+        "tile_index": 0,
+        "badges": ["Хит продаж"]
+      }
+    },
+    {
+      "external_id": "1698451203",
+      "title": "Компьютер офисный DEXP Aquilon O256 (Core i3-12100, 8 ГБ, 256 ГБ SSD)",
+      "brand": "DEXP",
+      "price_amount": 2299000,
+      "old_price_amount": null,
+      "currency": "RUB",
+      "image_url": "https://cdn1.ozone.ru/s3/multimedia-9-v/6998451203.jpg",
+      "product_url": "https://www.ozon.ru/product/kompyuter-ofisnyy-dexp-aquilon-o256-1698451203/",
+      "rating_value": 4.6,
+      "rating_count": 1284,
+      "availability_status": "in_stock",
+      "stock_quantity": null,
+      "raw_payload": null
+    },
+    {
+      "external_id": "1401002233",
+      "title": "Моноблок HP All-in-One 24-cb1035ci 23.8\" (Core i5-1235U, 16 ГБ, 512 ГБ SSD)",
+      "brand": "HP",
+      "price_amount": 6349000,
+      "old_price_amount": null,
+      "currency": "RUB",
+      "image_url": "https://cdn1.ozone.ru/s3/multimedia-1-p/7101002233.jpg",
+      "product_url": "https://www.ozon.ru/product/monoblok-hp-all-in-one-24-cb1035ci-1401002233/",
+      "rating_value": null,
+      "rating_count": null,
+      "availability_status": "in_stock",
+      "stock_quantity": null,
+      "raw_payload": null
+    },
+    {
+      "external_id": "1755000111",
+      "title": "Компьютер неттоп Lenovo ThinkCentre M70q Gen 3 (Core i5-12400T, 16 ГБ, 512 ГБ SSD)",
+      "brand": "Lenovo",
+      "price_amount": 5720000,
+      "old_price_amount": null,
+      "currency": "RUB",
+      "image_url": "https://cdn1.ozone.ru/s3/multimedia-6-c/7255000111.jpg",
+      "product_url": "https://www.ozon.ru/product/kompyuter-nettop-lenovo-thinkcentre-m70q-gen-3-1755000111/",
+      "rating_value": 4.5,
+      "rating_count": 38,
+      "availability_status": "out_of_stock",
+      "stock_quantity": 0,
+      "raw_payload": null
+    },
+    {
+      "external_id": "1234567890",
+      "title": "Системный блок RASKAT Standart 300 (Intel Core i5-11400, 16 ГБ, 480 ГБ SSD)",
+      "brand": "RASKAT",
+      "price_amount": 4599000,
+      "old_price_amount": null,
+      "currency": "RUB",
+      "image_url": "https://cdn1.ozone.ru/s3/multimedia-4-m/6934567890.jpg",
+      "product_url": "https://www.ozon.ru/product/sistemnyy-blok-raskat-standart-300-1234567890/",
+      "rating_value": 4.9,
+      "rating_count": 76,
+      "availability_status": "in_stock",
+      "stock_quantity": 4,
+      "raw_payload": null
+    }
+  ],
+  "meta": {
+    "provider": "ozon",
+    "took_ms": 2814,
+    "extraction_mode": "next_data",
+    "total_hint": 5643
+  }
+}

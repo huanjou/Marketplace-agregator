@@ -6,6 +6,7 @@ namespace App\Jobs;
 
 use App\DTO\Search\ProductSearchQuery;
 use App\Enums\SyncStatus;
+use App\Models\Provider;
 use App\Models\SyncLog;
 use App\Services\ProductResultNormalizer;
 use App\Services\ProviderRegistry;
@@ -58,7 +59,11 @@ class SyncProviderCatalog implements ShouldQueue
         try {
             $provider = $registry->get($this->providerCode);
 
-            if (! $provider->isEnabled()) {
+            // Two independent switches veto a catalogue walk: the `enabled`
+            // toggle an operator flips in the admin panel, and the provider's
+            // own verdict (configuration plus, on the scraping providers,
+            // transient reachability).
+            if ($this->isSwitchedOff() || ! $provider->isEnabled()) {
                 $log->markCompleted(SyncStatus::Failed->value, ['reason' => 'disabled']);
 
                 return;
@@ -127,5 +132,19 @@ class SyncProviderCatalog implements ShouldQueue
 
             throw $e;
         }
+    }
+
+    /**
+     * The providers row is the operator's decision and outranks whatever the
+     * provider reports about itself: a provider switched off in the admin
+     * panel must never be called at all. The comparison is left to the
+     * database so no boolean is reinterpreted on the PHP side.
+     */
+    private function isSwitchedOff(): bool
+    {
+        return Provider::query()
+            ->where('code', $this->providerCode)
+            ->where('enabled', false)
+            ->exists();
     }
 }
