@@ -31,9 +31,9 @@ class OzonScrapeProviderTest extends TestCase
             'marketplace.providers.ozon.rate_limit_per_minute' => 0,
         ]);
 
-        // isReachable() memoises its verdict for 30 seconds, so each test has
-        // to start from a clean slate.
-        Cache::forget('playwright:reachable');
+        // isReachable() memoises its verdict for 30 seconds (keyed by the
+        // scraper base url), so each test has to start from a clean slate.
+        Cache::flush();
     }
 
     public function test_search_maps_playwright_response_to_product_search_result(): void
@@ -85,7 +85,7 @@ class OzonScrapeProviderTest extends TestCase
         $this->assertSame('skipped', $result->providerMeta['ozon']['status']);
         $this->assertSame('disabled_or_unreachable', $result->providerMeta['ozon']['skipped']);
 
-                Cache::flush();
+        Cache::flush();
         $health = $provider->healthCheck();
 
         $this->assertFalse($health->isHealthy());

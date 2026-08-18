@@ -25,7 +25,7 @@ class YandexMarketScrapeProviderTest extends TestCase
     public function test_search_maps_playwright_response(): void
     {
         // Ensure the reachable cache doesn't interfere
-        Cache::forget('playwright:reachable');
+        Cache::flush();
 
         $fixture = $this->fixturePayload();
 
@@ -52,7 +52,7 @@ class YandexMarketScrapeProviderTest extends TestCase
 
     public function test_search_gracefully_handles_playwright_down(): void
     {
-        Cache::forget('playwright:reachable');
+        Cache::flush();
 
         Http::fake([
             '*/health' => Http::response(['error' => 'service down'], 503),

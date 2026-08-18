@@ -15,6 +15,8 @@ use App\Models\Provider;
 use App\Models\ProviderProduct;
 use App\Models\SyncLog;
 use Illuminate\Foundation\Testing\DatabaseTransactions;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
 
 /**
@@ -72,6 +74,11 @@ class BackgroundJobsTest extends TestCase
 
     public function test_health_check_records_the_verdict_on_every_provider(): void
     {
+        // The scraping transports are faked down: the sweep must never hit a
+        // real scraper service, and unreachable transports read as 'down'.
+        Cache::flush();
+        Http::fake(['*' => Http::response('', 503)]);
+
         dispatch_sync(new ProviderHealthCheck());
 
         $this->assertSame('healthy', Provider::where('code', 'fake')->value('last_health_status'));
@@ -79,7 +86,7 @@ class BackgroundJobsTest extends TestCase
 
         $this->assertSame(SyncStatus::Succeeded->value, $this->latestLog('health_check', 'fake')->status);
 
-        // Unconfigured providers report themselves down without an HTTP call.
+        // With the scraper transports down, the scraping providers report 'down'.
         $this->assertSame('down', Provider::where('code', 'ozon')->value('last_health_status'));
     }
 
