@@ -69,5 +69,22 @@ class ProviderSeeder extends Seeder
                 'cache_ttl_seconds' => 300,
             ]
         );
+
+        Provider::updateOrCreate(
+            ['code' => 'wildberries'],
+            [
+                'name' => 'Wildberries',
+                'provider_class' => 'App\\Services\\Providers\\Wildberries\\WildberriesProductProvider',
+                'enabled' => true,
+                'supports_realtime_search' => true,
+                'supports_catalog_sync' => false,
+                'capabilities' => [
+                    'price_range',
+                    'availability',
+                ],
+                'rate_limit_per_minute' => 30,
+                'cache_ttl_seconds' => 300,
+            ]
+        );
     }
 }

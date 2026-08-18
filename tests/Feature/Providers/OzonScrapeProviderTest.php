@@ -14,9 +14,9 @@ use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
 
 /**
- * Covers the Ozon provider over a faked Playwright service: the happy path
- * fan-in and the graceful degradation when the scraper is down. The real
- * service is never contacted.
+ * Covers the Ozon provider over a faked DrissionPage scraping service: the
+ * happy path fan-in and the graceful degradation when the scraper is down.
+ * The real service is never contacted.
  */
 class OzonScrapeProviderTest extends TestCase
 {
@@ -39,8 +39,8 @@ class OzonScrapeProviderTest extends TestCase
     public function test_search_maps_playwright_response_to_product_search_result(): void
     {
         Http::fake([
-            'playwright:3000/scrape' => Http::response($this->fixture(), 200),
-            'playwright:3000/health' => Http::response(['status' => 'ok'], 200),
+            'drissionpage:8000/scrape' => Http::response($this->fixture(), 200),
+            'drissionpage:8000/health' => Http::response(['status' => 'ok'], 200),
         ]);
 
         $provider = app(OzonProductProvider::class);
@@ -71,7 +71,7 @@ class OzonScrapeProviderTest extends TestCase
 
     public function test_search_gracefully_handles_playwright_down(): void
     {
-        Http::fake(['playwright:3000/*' => Http::response('', 503)]);
+        Http::fake(['drissionpage:8000/*' => Http::response('', 503)]);
 
         $provider = app(OzonProductProvider::class);
 
@@ -85,7 +85,7 @@ class OzonScrapeProviderTest extends TestCase
         $this->assertSame('skipped', $result->providerMeta['ozon']['status']);
         $this->assertSame('disabled_or_unreachable', $result->providerMeta['ozon']['skipped']);
 
-        Cache::forget('playwright:reachable');
+                Cache::flush();
         $health = $provider->healthCheck();
 
         $this->assertFalse($health->isHealthy());
@@ -95,8 +95,8 @@ class OzonScrapeProviderTest extends TestCase
     public function test_health_check_flags_an_empty_scrape_as_degraded(): void
     {
         Http::fake([
-            'playwright:3000/health' => Http::response(['status' => 'ok'], 200),
-            'playwright:3000/scrape' => Http::response(['items' => [], 'meta' => ['provider' => 'ozon']], 200),
+            'drissionpage:8000/health' => Http::response(['status' => 'ok'], 200),
+            'drissionpage:8000/scrape' => Http::response(['items' => [], 'meta' => ['provider' => 'ozon']], 200),
         ]);
 
         $health = app(OzonProductProvider::class)->healthCheck();

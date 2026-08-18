@@ -9,6 +9,7 @@ use App\Services\ProviderRegistry;
 use App\Services\Providers\Fake\FakeProductProvider;
 use App\Services\Providers\Ozon\OzonProductProvider;
 use App\Services\Providers\YandexMarket\YandexMarketProductProvider;
+use App\Services\Providers\Wildberries\WildberriesProductProvider;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Support\ServiceProvider;
 
@@ -24,6 +25,7 @@ class AppServiceProvider extends ServiceProvider
         FakeProductProvider::class,
         OzonProductProvider::class,
         YandexMarketProductProvider::class,
+        WildberriesProductProvider::class,
     ];
 
     /**
@@ -65,5 +67,14 @@ class AppServiceProvider extends ServiceProvider
                 timeoutMs: (int) $app['config']->get('marketplace.playwright.timeout_ms'),
             );
         });
+
+        $this->app->when(OzonProductProvider::class)
+            ->needs(PlaywrightScraperClient::class)
+            ->give(static function (Application $app): PlaywrightScraperClient {
+                return new PlaywrightScraperClient(
+                    baseUrl: (string) $app['config']->get('marketplace.drissionpage.base_url'),
+                    timeoutMs: (int) $app['config']->get('marketplace.drissionpage.timeout_ms'),
+                );
+            });
     }
 }

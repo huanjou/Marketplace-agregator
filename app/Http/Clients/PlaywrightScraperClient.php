@@ -150,7 +150,7 @@ final class PlaywrightScraperClient
     {
         try {
             return (bool) Cache::remember(
-                self::REACHABLE_CACHE_KEY,
+                self::REACHABLE_CACHE_KEY . ':' . md5($this->baseUrl),
                 self::REACHABLE_CACHE_TTL_SECONDS,
                 function (): bool {
                     try {

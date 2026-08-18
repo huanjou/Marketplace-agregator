@@ -9,4 +9,5 @@ enum ProviderCode: string
     case Fake = 'fake';
     case Ozon = 'ozon';
     case YandexMarket = 'yandex_market';
+    case Wildberries = 'wildberries';
 }

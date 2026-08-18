@@ -91,7 +91,7 @@ class ProductSearchDashboard extends Page implements HasForms
     {
         $this->form->fill([
             'query' => null,
-            'providerCodes' => [ProviderCode::Ozon->value, ProviderCode::YandexMarket->value],
+            'providerCodes' => [ProviderCode::Ozon->value, ProviderCode::YandexMarket->value, ProviderCode::Wildberries->value],
             'minPrice' => null,
             'maxPrice' => null,
             'brands' => [],

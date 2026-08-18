@@ -4,9 +4,10 @@ import stealth from 'puppeteer-extra-plugin-stealth';
 const BLOCKED_RESOURCE_TYPES = new Set(['image', 'font', 'stylesheet', 'media']);
 const BLOCKED_URL_PATTERN = /mc\.yandex|top-fwz1|google-analytics|googletagmanager|facebook\.net|adservice|pixel/i;
 
-// Ozon's antibot fingerprints whether a client fetches the full asset set, so
-// images/CSS/fonts stay allowed there; every other host keeps the fast path.
-const FULL_ASSET_HOST_PATTERN = /ozon/i;
+// Ozon's and Wildberries' antibot fingerprint whether a client fetches the full
+// asset set, so images/CSS/fonts stay allowed there; every other host keeps the
+// fast path. WB serves its assets from wbbasket.ru / wb.ru CDN hosts.
+const FULL_ASSET_HOST_PATTERN = /ozon|wildberries|wbbasket|wb\.ru/i;
 
 const CONTEXT_OPTIONS = {
   locale: 'ru-RU',

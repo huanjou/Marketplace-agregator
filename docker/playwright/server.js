@@ -38,7 +38,7 @@ const scrapeSchema = {
     type: 'object',
     required: ['provider', 'query'],
     properties: {
-      provider: { type: 'string', enum: ['ozon', 'yandex_market'] },
+      provider: { type: 'string', enum: ['ozon', 'yandex_market', 'wildberries'] },
       query: { type: 'string', minLength: 0, maxLength: 200 },
       page: { type: 'integer', minimum: 1, default: 1 },
       timeout_ms: { type: 'integer', minimum: 1000, maximum: 30000, default: 8000 },

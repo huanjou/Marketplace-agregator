@@ -292,6 +292,7 @@
             .psd-chip--fake { --chip: #a8a29b; }
             .psd-chip--ozon { --chip: #6b93ff; }
             .psd-chip--yandex_market { --chip: #ffcc00; }
+            .psd-chip--wildberries { --chip: #cb11ab; }
 
             .psd-card__title {
                 display: -webkit-box;

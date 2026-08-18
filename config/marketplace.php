@@ -16,7 +16,12 @@ return [
 
     'playwright' => [
         'base_url' => env('PLAYWRIGHT_URL', 'http://playwright:3000'),
-        'timeout_ms' => (int) env('PLAYWRIGHT_TIMEOUT_MS', 10000),
+        'timeout_ms' => (int) env('PLAYWRIGHT_TIMEOUT_MS', 20000),
+    ],
+
+    'drissionpage' => [
+        'base_url' => env('DRISSIONPAGE_URL', 'http://drissionpage:8000'),
+        'timeout_ms' => (int) env('DRISSIONPAGE_TIMEOUT_MS', 20000),
     ],
 
     /*
@@ -57,6 +62,15 @@ return [
             'rate_limit_per_minute' => (int) env('YANDEX_MARKET_RATE_LIMIT_PER_MINUTE', 30),
             'cache_ttl_seconds' => (int) env('YANDEX_MARKET_CACHE_TTL_SECONDS', 900),
         ],
+
+        'wildberries' => [
+            'class' => \App\Services\Providers\Wildberries\WildberriesProductProvider::class,
+            'enabled' => env('MARKETPLACE_WILDBERRIES_ENABLED', true),
+            'display_name' => 'Wildberries',
+            'search_url_template' => env('WILDBERRIES_SEARCH_URL', 'https://www.wildberries.ru/catalog/0/search.aspx?search={query}'),
+            'rate_limit_per_minute' => (int) env('WILDBERRIES_RATE_LIMIT_PER_MINUTE', 30),
+            'cache_ttl_seconds' => (int) env('WILDBERRIES_CACHE_TTL_SECONDS', 900),
+        ],
     ],
 
     /*
@@ -66,7 +80,7 @@ return [
     */
 
     'search' => [
-        'default_timeout_ms' => 5000,
+        'default_timeout_ms' => 15000,
         'default_per_page' => 20,
         'max_per_page' => 100,
         'cache_ttl_seconds' => 900,
