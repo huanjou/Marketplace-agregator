@@ -147,6 +147,14 @@ class BrowserWorker:
         lowered = (title or "").lower()
         return any(marker in lowered for marker in ("antibot", "captcha", "нет соединения"))
 
+    @staticmethod
+    def _is_soft_error(page) -> bool:
+        """Http 200 shell whose search widget died server-side."""
+        try:
+            return "Произошла ошибка" in (page.content() or "")
+        except Exception:
+            return False
+
     def _warm_session(self, page, budget_ms: int) -> None:
         """
         Visits the homepage and lets the ABT challenge resolve. Two flows:
@@ -369,6 +377,20 @@ class BrowserWorker:
 
         items = (extracted or {}).get("items") or []
         mode = (extracted or {}).get("mode") or "failed"
+
+        if not items and self._is_soft_error(page):
+            # Ozon occasionally serves its soft "Произошла ошибка" shell with
+            # http 200 when the search widget fails server-side; the page
+            # itself suggests a refresh, and a reload usually fixes it.
+            logger.warning("Soft error page detected; reloading once")
+            try:
+                page.reload(timeout=max(5000, remaining_ms()), wait_until="domcontentloaded")
+                page.wait_for_timeout(3000)
+                extracted = page.evaluate(self._extraction_js)
+                items = (extracted or {}).get("items") or []
+                mode = (extracted or {}).get("mode") or mode
+            except Exception as e:
+                logger.warning("Soft-error reload failed: %s", e)
 
         if not items:
             try:

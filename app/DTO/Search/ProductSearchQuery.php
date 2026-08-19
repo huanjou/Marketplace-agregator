@@ -35,6 +35,13 @@ readonly class ProductSearchQuery
         );
     }
 
+    /**
+     * Identity of the underlying match set, NOT of the requested page.
+     *
+     * Results are cached as the whole sorted set and the page is sliced at
+     * read time (ProductSearchResult::forPage), so flipping pages must never
+     * re-run the scrapers.
+     */
     public function cacheFingerprint(): string
     {
         $normalized = $this->normalized();
@@ -42,8 +49,6 @@ readonly class ProductSearchQuery
             'text' => $normalized->text,
             'filters' => $normalized->filters->toArray(),
             'sort' => $normalized->sort->field->value . '_' . $normalized->sort->direction,
-            'page' => $normalized->page,
-            'per_page' => $normalized->perPage,
             'providers' => $normalized->providerCodes,
         ]);
 

@@ -26,8 +26,15 @@ use Throwable;
 #[Layout('components.layouts.public')]
 class PublicProductSearch extends Component
 {
-    /** Searches per IP per minute — the fan-out hits live scrapers. */
+    /** New searches per IP per minute — the fan-out hits live scrapers. */
     private const RATE_LIMIT_PER_MINUTE = 15;
+
+    /**
+     * Page flips per IP per minute. These are served from the cached match
+     * set (no scraper traffic), so the budget is generous — it only guards
+     * against the rare re-run after the cache TTL expires.
+     */
+    private const PAGE_RATE_LIMIT_PER_MINUTE = 60;
 
     public string $query = '';
 
@@ -89,9 +96,10 @@ class PublicProductSearch extends Component
             return;
         }
 
-        $rateKey = 'public-search:' . request()->ip();
+        $rateKey = ($resetPage ? 'public-search:' : 'public-search:page:') . request()->ip();
+        $rateLimit = $resetPage ? self::RATE_LIMIT_PER_MINUTE : self::PAGE_RATE_LIMIT_PER_MINUTE;
 
-        if (! RateLimiter::attempt($rateKey, self::RATE_LIMIT_PER_MINUTE, static fn (): bool => true)) {
+        if (! RateLimiter::attempt($rateKey, $rateLimit, static fn (): bool => true)) {
             $this->notice = 'Слишком много запросов. Подождите минуту и попробуйте снова.';
 
             return;

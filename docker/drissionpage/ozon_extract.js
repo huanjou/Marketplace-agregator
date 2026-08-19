@@ -17,18 +17,23 @@
   };
 
   /**
-   * Modern SERPs obfuscate class names, so locate the title heuristically:
-   * the longest non-trivial anchor text inside the tile is the product name.
+   * Modern SERPs obfuscate most class names, but the title span still carries
+   * the stable tsBody500Medium typography class. The image anchor must NOT be
+   * mined for text: it wraps the promo badges ("Осталось 10 шт", "Новинка"),
+   * whose concatenated text is longer than short product titles.
    */
   const extractTitle = (tile, anchor) => {
-    let best = null;
-    for (const node of tile.querySelectorAll('a')) {
+    const spanText = tile
+      .querySelector('.tsBody500Medium, [class*="tsBody500"]')
+      ?.textContent?.trim();
+    if (spanText && spanText.length > 2) return spanText;
+
+    for (const node of tile.querySelectorAll('a[href*="/product/"]')) {
+      if (node.querySelector('img')) continue; // image+badge anchor, not the title
       const value = node.textContent.trim();
-      if (value.length > 15 && !/^\d[\d\s\u00a0,.₽%]*$/.test(value)) {
-        if (!best || value.length > best.length) best = value;
-      }
+      if (value.length > 3 && !/^\d[\d\s\u00a0,.₽%]*$/.test(value)) return value;
     }
-    return best ?? anchor?.getAttribute('title') ?? tile.querySelector('img')?.getAttribute('alt') ?? null;
+    return anchor?.getAttribute('title') ?? tile.querySelector('img')?.getAttribute('alt') ?? null;
   };
 
   const absoluteUrl = (url) => {

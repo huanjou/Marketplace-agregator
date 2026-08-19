@@ -68,7 +68,8 @@ class FakeProductProvider implements ProductProviderInterface
     }
 
     /**
-     * Returns the paginated match set for the query.
+     * Returns the full match set for the query; the requested page is sliced
+     * out by the aggregation pipeline (ProductSearchResult::forPage).
      */
     public function search(ProductSearchQuery $query): ProductSearchResult
     {
@@ -80,9 +81,6 @@ class FakeProductProvider implements ProductProviderInterface
         $matched = array_values($matched);
 
         $total = count($matched);
-
-        $offset = ($normalized->page - 1) * $normalized->perPage;
-        $matched = array_values(array_slice($matched, $offset, $normalized->perPage));
 
         return new ProductSearchResult(
             items: $matched,

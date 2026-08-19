@@ -8,8 +8,9 @@ use App\Services\ProductSearchService;
 use Tests\TestCase;
 
 /**
- * Guards the pagination contract: providers hand over their full match set and
- * ResultAggregator is the only component that slices a page out of it.
+ * Guards the pagination contract: providers hand over their full match set,
+ * the whole sorted set is cached under a page-independent key, and the
+ * requested page is sliced at read time (ProductSearchResult::forPage).
  */
 class PaginationPipelineTest extends TestCase
 {
@@ -17,8 +18,8 @@ class PaginationPipelineTest extends TestCase
     {
         parent::setUp();
 
-        // Each page is cached under its own key; an in-memory store keeps the
-        // test independent of whatever the shared cache already holds.
+        // An in-memory store keeps the test independent of whatever the
+        // shared cache already holds.
         config(['cache.default' => 'array']);
     }
 

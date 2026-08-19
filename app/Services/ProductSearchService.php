@@ -40,6 +40,22 @@ class ProductSearchService
     public function search(ProductSearchQuery $query): ProductSearchResult
     {
         $query = $query->normalized();
+        $requestedPage = $query->page;
+
+        // Scrapers always harvest the first SERP surface; the requested page
+        // is sliced out of the cached full set at the end. Passing a deeper
+        // page down would both re-run the scrapers and poison the shared
+        // cache with a partial set.
+        $query = new ProductSearchQuery(
+            text: $query->text,
+            filters: $query->filters,
+            sort: $query->sort,
+            page: 1,
+            perPage: $query->perPage,
+            providerCodes: $query->providerCodes,
+            timeoutMs: $query->timeoutMs,
+        );
+
         $startedAt = CarbonImmutable::now();
         $startedAtMs = microtime(true);
 
@@ -52,7 +68,9 @@ class ProductSearchService
                 'total' => $cached->total,
             ]);
 
-            return $cached;
+            // The cache holds the whole sorted match set; the requested page
+            // is cut out in memory without touching any scraper.
+            return $cached->forPage($requestedPage, $query->perPage);
         }
 
         $providers = $this->registry
@@ -94,15 +112,19 @@ class ProductSearchService
             ]),
         );
 
+        // Cache the whole match set under a page-independent key so that
+        // subsequent page flips are served from memory.
         $this->cache->put(
             $query,
             $result,
             (int) config('marketplace.search.cache_ttl_seconds', 300)
         );
 
-        $this->logSearch($query, $result, $fanOut, $startedAt, $startedAtMs);
+        $paged = $result->forPage($requestedPage, $query->perPage);
 
-        return $result;
+        $this->logSearch($query, $paged, $fanOut, $startedAt, $startedAtMs, $requestedPage);
+
+        return $paged;
     }
 
     /**
@@ -201,6 +223,7 @@ class ProductSearchService
         array $fanOut,
         CarbonImmutable $startedAt,
         float $startedAtMs,
+        int $requestedPage,
     ): void {
         $this->writeSyncLog([
             'provider_code' => null,
@@ -213,7 +236,7 @@ class ProductSearchService
                 'text' => $query->text,
                 'filters' => $query->filters->toArray(),
                 'sort' => $query->sort->field->value . '_' . $query->sort->direction,
-                'page' => $query->page,
+                'page' => $requestedPage,
                 'per_page' => $query->perPage,
                 'providers' => array_keys($fanOut['meta']),
             ],

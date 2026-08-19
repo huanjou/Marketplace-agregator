@@ -11,13 +11,14 @@ use App\Enums\SearchSortField;
 
 /**
  * Turns the flat list of items harvested from every provider into a single
- * paginated result set: de-duplicate, apply a global sort across providers,
- * then slice the requested page.
+ * sorted match set: de-duplicate, then apply a global sort across providers.
  *
  * Sorting has to happen globally (not per provider) — otherwise "cheapest
- * first" would only be true inside each provider's own slice. For the same
- * reason this class is the ONLY place allowed to slice: providers hand over
- * their full match set and merely advertise their totals in providerMeta.
+ * first" would only be true inside each provider's own slice.
+ *
+ * The whole sorted set is returned and cached under a page-independent key;
+ * the requested page is sliced at read time by ProductSearchResult::forPage,
+ * so pagination never re-runs the scrapers.
  */
 class ResultAggregator
 {
@@ -42,26 +43,20 @@ class ResultAggregator
         $deduplicatedCount = count($sorted);
         $total = $this->totalFromProviderMeta($providerMeta) ?? $deduplicatedCount;
 
-        // Providers have already paginated their results based on the requested page.
-        // We only take the top N items from the merged set.
-        $page = array_values(array_slice($sorted, 0, $query->perPage));
-
+        // No slicing here: the whole sorted set is what gets cached, and the
+        // requested page is cut out by ProductSearchResult::forPage().
         return new ProductSearchResult(
-            items: $page,
+            items: array_values($sorted),
             total: $total,
-            nextCursor: ($query->page * $query->perPage) < $total
-                ? (string) ($query->page + 1)
-                : null,
+            nextCursor: null,
             providerMeta: array_merge($providerMeta, [
                 'aggregate' => [
                     'raw' => $rawCount,
                     'deduplicated' => $deduplicatedCount,
                     'duplicates_removed' => $rawCount - $deduplicatedCount,
-                    'returned' => count($page),
+                    'returned' => $deduplicatedCount,
                     'total' => $total,
                     'sort' => $query->sort->field->value,
-                    'page' => $query->page,
-                    'per_page' => $query->perPage,
                 ],
             ]),
         );
