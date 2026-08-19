@@ -181,6 +181,7 @@ class PublicProductSearch extends Component
             'oldPrice' => $item->oldPriceAmount !== null && $item->oldPriceAmount > ($item->priceAmount ?? 0)
                 ? number_format($item->oldPriceAmount / 100, 0, '.', ' ') . ' ₽'
                 : null,
+            'providerCode' => $item->providerCode,
             'providerName' => $this->providerName($item->providerCode),
             'imageUrl' => $item->primaryImageUrl(),
             'productUrl' => $item->productUrl,

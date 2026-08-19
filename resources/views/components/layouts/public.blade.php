@@ -110,6 +110,19 @@
             border-radius: 999px;
             background: #fafafa;
         }
+        /* Marketplace highlights: Яндекс — жёлтый, WB — фиолетовый, Ozon — голубой. */
+        .badge--yandex_market { background: #fef6c2; border-color: #f5d442; color: #8a6d00; }
+        .badge--wildberries   { background: #f3e4fd; border-color: #c78ae8; color: #7b2ea8; }
+        .badge--ozon          { background: #dff1fd; border-color: #7ec8ef; color: #0a6ea8; }
+        .dot {
+            width: 9px; height: 9px;
+            border-radius: 50%;
+            display: inline-block;
+            background: var(--line);
+        }
+        .dot--yandex_market { background: #f5d442; }
+        .dot--wildberries   { background: #b266d9; }
+        .dot--ozon          { background: #59b7ec; }
         .rating { color: #b7791f; }
         .empty { padding: 40px 0; text-align: center; color: var(--muted); }
         .pagination { display: flex; gap: 6px; justify-content: center; margin-top: 26px; flex-wrap: wrap; }

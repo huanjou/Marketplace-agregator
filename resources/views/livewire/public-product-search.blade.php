@@ -19,7 +19,7 @@
                 @foreach ($this->providerOptions() as $code => $name)
                     <label>
                         <input type="checkbox" wire:model.live="providerCodes" value="{{ $code }}">
-                        {{ $name }}
+                        <span class="dot dot--{{ $code }}"></span>{{ $name }}
                     </label>
                 @endforeach
             </div>
@@ -61,7 +61,7 @@
                                 @endif
                             </div>
                             <div class="foot">
-                                <span class="badge">{{ $item['providerName'] }}</span>
+                                <span class="badge badge--{{ $item['providerCode'] }}">{{ $item['providerName'] }}</span>
                                 @if ($item['rating'])
                                     <span class="rating">★ {{ number_format($item['rating'], 1) }}@if ($item['ratingCount']) ({{ $item['ratingCount'] }})@endif</span>
                                 @endif
