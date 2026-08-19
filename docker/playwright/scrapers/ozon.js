@@ -12,7 +12,7 @@ function externalIdFromUrl(url) {
     return null;
   }
 
-  const match = String(url).match(/\/product\/(?:[^/?#]*?-)?(\d+)/);
+  const match = String(url).match(/\/product\/[^/?#]*?(\d+)(?=[/?#]|$)/);
 
   return match ? match[1] : null;
 }
@@ -219,11 +219,52 @@ function normalizeJsonEntry(entry) {
 }
 
 /**
+ * Ozon answers suspicious IPs with HTTP 403 + "Antibot Challenge Page": inline
+ * JS fingerprints the browser and posts the verdict to `/abt/result`, which on
+ * success refreshes the page with a clean session. When the budget allows it,
+ * give that JS a bounded window to run and reload once; if the page is still a
+ * 403 challenge afterwards the IP itself is rejected (datacenter / non-RU), so
+ * we throw ANTIBOT instead of burning the rest of the budget.
+ *
+ * Returns the post-challenge response (may be null when the reload raced).
+ */
+async function resolveChallenge(page, status, elapsed, timeoutMs, label) {
+  const remaining = () => timeoutMs - elapsed();
+
+  if (remaining() < 3500) {
+    throw {
+      code: 'ANTIBOT',
+      message: `Blocked with http ${status} (${label})`,
+      took_ms: elapsed(),
+    };
+  }
+
+  // The challenge scripts post their result within ~2s of page load.
+  await page.waitForTimeout(Math.min(2500, remaining() - 1500));
+
+  const reload = await page
+    .reload({ waitUntil: 'commit', timeout: Math.max(1000, Math.min(8000, remaining() - 1000)) })
+    .catch(() => null);
+
+  const reloadedStatus = reload?.status() ?? status;
+
+  if (reloadedStatus === 403 || reloadedStatus === 429) {
+    throw {
+      code: 'ANTIBOT',
+      message: `Blocked with http ${reloadedStatus} after challenge wait (${label})`,
+      took_ms: elapsed(),
+    };
+  }
+
+  return reload;
+}
+
+/**
  * Visits the Ozon homepage first so the search request carries the cookies the
  * antibot layer hands out there. Throws `{ code: 'ANTIBOT' }` when the homepage
  * itself is blocked — no point spending the rest of the budget on /search.
  */
-async function warmUpSession(page, budgetMs, elapsed) {
+async function warmUpSession(page, budgetMs, elapsed, timeoutMs) {
   const response = await page.goto(BASE_URL + '/', {
     waitUntil: 'domcontentloaded',
     timeout: budgetMs,
@@ -232,11 +273,7 @@ async function warmUpSession(page, budgetMs, elapsed) {
   const status = response?.status() ?? 0;
 
   if (status === 403 || status === 429) {
-    throw {
-      code: 'ANTIBOT',
-      message: `Blocked with http ${status} (homepage warm-up)`,
-      took_ms: elapsed(),
-    };
+    await resolveChallenge(page, status, elapsed, timeoutMs, 'homepage warm-up');
   }
 
   // Let the client-side bootstrap run and look like a reader, not a fetcher.
@@ -263,7 +300,12 @@ export async function scrape(page, { query, page: pageNum = 1, timeout_ms: timeo
 
   try {
     // Half the budget at most, so a slow homepage never starves the search step.
-    await warmUpSession(page, Math.min(10000, Math.max(2000, Math.round(timeoutMs / 2))), elapsed);
+    await warmUpSession(
+      page,
+      Math.min(10000, Math.max(2000, Math.round(timeoutMs / 2))),
+      elapsed,
+      timeoutMs,
+    );
 
     // `commit` resolves as soon as response headers arrive, so a challenge page is
     // classified immediately instead of hanging until the navigation timeout.
@@ -276,7 +318,7 @@ export async function scrape(page, { query, page: pageNum = 1, timeout_ms: timeo
 
     // Ozon answers datacenter IPs with HTTP 403 + "Antibot Challenge Page".
     if (status === 403 || status === 429) {
-      throw { code: 'ANTIBOT', message: `Blocked with http ${status}`, took_ms: elapsed() };
+      await resolveChallenge(page, status, elapsed, timeoutMs, 'search');
     }
 
     await page

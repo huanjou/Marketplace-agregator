@@ -47,6 +47,10 @@ services:
       PORT: 3000
       NODE_ENV: production
       LOG_LEVEL: info
+      # Optional egress proxy for the browser pool (http://user:pass@host:port).
+      # Unused at the moment: WB/Yandex Market work over direct egress, and
+      # Ozon is scraped by the Camoufox service below instead.
+      PROXY_URL: ${PROXY_URL:-}
     deploy:
       resources:
         limits:
@@ -72,6 +76,11 @@ services:
       - "8000:8000"
     volumes:
       - ./public:/app/public
+    environment:
+      # Sticky RU residential proxy the Ozon scraper egresses through. Ozon's
+      # ABT challenge binds cookies to the IP, so the line MUST keep one IP
+      # for the whole session (rotation breaks scraping).
+      PROXY_URL: ${OZON_PROXY_URL:-${PROXY_URL:-}}
     deploy:
       resources:
         limits:

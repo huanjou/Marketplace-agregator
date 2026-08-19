@@ -22,12 +22,46 @@ const MAX_USES_PER_CONTEXT = Number(process.env.CONTEXT_MAX_USES || 50);
 const ACQUIRE_TIMEOUT_MS = Number(process.env.POOL_ACQUIRE_TIMEOUT_MS || 5000);
 
 /**
+ * Optional egress proxy, e.g. `http://user:pass@ru-residential.example:8080`.
+ * Ozon's ABT antibot rejects datacenter / non-RU IPs outright (403 challenge
+ * that never resolves), so a residential/RU proxy is the supported way to
+ * restore scraping. Leave unset to go out directly.
+ */
+const PROXY_URL = process.env.PROXY_URL || '';
+
+function parseProxy(url) {
+  if (!url) {
+    return undefined;
+  }
+
+  try {
+    const parsed = new URL(url);
+    const proxy = { server: `${parsed.protocol}//${parsed.hostname}:${parsed.port || 8080}` };
+
+    if (parsed.username) {
+      proxy.username = decodeURIComponent(parsed.username);
+      proxy.password = decodeURIComponent(parsed.password || '');
+    }
+
+    return proxy;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Launches a single Chromium browser and keeps `size` pre-warmed BrowserContexts
  * ready for checkout. Contexts are recycled after MAX_USES_PER_CONTEXT scrapes so
  * that cookie/storage state never grows unbounded.
  */
 export async function initPool({ size = 4, log = console } = {}) {
   playwrightChromium.use(stealth());
+
+  const proxy = parseProxy(PROXY_URL);
+
+  if (PROXY_URL && !proxy) {
+    log.warn?.({ proxy_url: PROXY_URL }, 'PROXY_URL is not a valid URL — launching without a proxy');
+  }
 
   const browser = await playwrightChromium.launch({
     headless: true,
@@ -36,7 +70,12 @@ export async function initPool({ size = 4, log = console } = {}) {
       '--no-sandbox',
       '--disable-blink-features=AutomationControlled',
     ],
+    ...(proxy ? { proxy } : {}),
   });
+
+  if (proxy) {
+    log.info?.({ server: proxy.server }, 'egress proxy enabled');
+  }
 
   /** @type {Array<{ context: import('playwright').BrowserContext, uses: number }>} */
   const available = [];

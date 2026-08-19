@@ -1,10 +1,31 @@
-import time
-import json
-import urllib.parse
-from fastapi import FastAPI, HTTPException, Request
-from pydantic import BaseModel
-from DrissionPage import ChromiumPage, ChromiumOptions
+"""
+Ozon scraping service backed by Camoufox (anti-detect Firefox).
+
+Ozon's ABT antibot layer rejects every Chromium fingerprint we tested — even
+through a clean RU residential IP the challenge page answers "Выключите VPN".
+Camoufox passes the same challenge, so this service keeps one persistent
+Camoufox browser behind the configured egress proxy (PROXY_URL), warms the
+session on the homepage once, and then scrapes public search pages.
+
+All Playwright calls run on a single dedicated worker thread (the sync API is
+bound to the thread that launched the browser); FastAPI endpoints hand jobs
+to it through a queue.
+
+The HTTP contract is unchanged: POST /scrape {provider, query, page,
+timeout_ms} -> {items, meta}, GET /health. Items are snake_case dicts,
+JSON-first (__NEXT_DATA__) with a DOM fallback — same shape the Playwright
+service returns for the other providers.
+"""
+
 import logging
+import os
+import queue
+import threading
+import time
+import urllib.parse
+
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -12,183 +33,435 @@ logger = logging.getLogger(__name__)
 app = FastAPI()
 
 START_TIME = time.time()
+BASE_URL = "https://www.ozon.ru"
+
+# A session that has been idle this long gets re-warmed on the homepage before
+# the next search, because Ozon lets challenge cookies lapse.
+SESSION_MAX_IDLE_SECONDS = 600
+
+# After this many searches the session is rotated proactively (fresh browser
+# context), because Ozon escalates to a visual captcha after sustained
+# scraping from one session.
+MAX_SEARCHES_PER_SESSION = 6
+
+JOB_TIMEOUT_SECONDS = 90
+
 
 class ScrapeRequest(BaseModel):
     provider: str
     query: str
     page: int = 1
-    timeout_ms: int = 15000
+    timeout_ms: int = 30000
 
-# Try to connect to host browser, fallback to internal container browser if not available
-try:
-    co = ChromiumOptions()
-    co.set_address('host.docker.internal:9222')
-    page = ChromiumPage(co)
-    logger.info("Connected to remote host browser at host.docker.internal:9222")
-except Exception as e:
-    logger.warning(f"Could not connect to host browser ({e}). Falling back to internal Docker browser.")
-    co_fallback = ChromiumOptions().headless(False).set_argument('--no-sandbox').set_argument('--disable-gpu')
-    co_fallback.set_user_agent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36')
-    page = ChromiumPage(co_fallback)
+
+def parse_proxy(url: str):
+    """http://user:pass@host:port -> playwright-style proxy dict."""
+    if not url:
+        return None
+    try:
+        rest = url.split("://", 1)[1]
+        creds, hostport = rest.split("@", 1)
+        user, pwd = creds.split(":", 1)
+        return {"server": "http://" + hostport, "username": user, "password": pwd}
+    except Exception:
+        logger.warning("Could not parse PROXY_URL; going out directly.")
+        return None
+
+
+PROXY = parse_proxy(os.environ.get("PROXY_URL", ""))
+
+
+class ScrapeError(Exception):
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+
+
+class BrowserWorker:
+    """Owns the Camoufox browser; every Playwright call runs in this thread."""
+
+    def __init__(self):
+        self._queue = queue.Queue()
+        self._thread = threading.Thread(target=self._loop, name="camoufox-worker", daemon=True)
+        self._extraction_js = ""
+        self._ctx = None
+        self._browser = None
+        self._page = None
+        self._session_ok_at = 0.0
+        self._searches = 0
+
+    # -- worker thread -------------------------------------------------------
+
+    def _loop(self):
+        while True:
+            job = self._queue.get()
+            fn, args, out = job
+            try:
+                result = fn(*args)
+                out.put((True, result))
+            except ScrapeError as e:
+                out.put((False, {"code": e.code, "message": str(e)}))
+            except Exception as e:  # noqa: BLE001 — surface anything as INTERNAL
+                logger.exception("Worker job failed")
+                out.put((False, {"code": "INTERNAL", "message": str(e)}))
+
+    def _launch(self):
+        from camoufox.sync_api import Camoufox
+
+        logger.info("Launching Camoufox browser (proxy=%s)", "on" if PROXY else "off")
+        self._ctx = Camoufox(headless="virtual", **({"proxy": PROXY} if PROXY else {}))
+        self._browser = self._ctx.__enter__()
+        self._page = None
+        self._session_ok_at = 0.0
+        self._searches = 0
+
+    def _teardown(self):
+        for closer in (
+            lambda: self._page and self._page.close(),
+            lambda: self._browser and self._browser.close(),
+            lambda: self._ctx and self._ctx.__exit__(None, None, None),
+        ):
+            try:
+                closer()
+            except Exception:
+                pass
+        self._ctx = self._browser = self._page = None
+
+    def _restart_session(self, reason: str):
+        logger.info("Rotating browser session (%s)", reason)
+        self._teardown()
+        self._launch()
+
+    def _get_page(self):
+        if self._browser is None:
+            self._launch()
+        if self._page is None or self._page.is_closed():
+            self._page = self._browser.new_page()
+            self._page.set_default_navigation_timeout(30000)
+        return self._page
+
+    @staticmethod
+    def _looks_challenged(title: str, status) -> bool:
+        if status in (403, 429):
+            return True
+        lowered = (title or "").lower()
+        return any(marker in lowered for marker in ("antibot", "captcha", "нет соединения"))
+
+    def _warm_session(self, page, budget_ms: int) -> None:
+        """
+        Visits the homepage and lets the ABT challenge resolve. Two flows:
+        the plain JS challenge (403 commit, /abt/result post, reload ~6-10s
+        later) and the escalated slide-puzzle captcha, which we solve by
+        template-matching the piece outline and dragging the slider.
+        Raises ScrapeError(ANTIBOT) when neither resolves inside the budget.
+        """
+        deadline = time.time() + budget_ms / 1000
+        # `domcontentloaded`: the SERP lazy-loads media, so `load` can stall.
+        response = page.goto(BASE_URL + "/", timeout=min(20000, budget_ms), wait_until="domcontentloaded")
+        status = response.status if response else 0
+        page.wait_for_timeout(6000)
+
+        if self._looks_challenged(page.title(), status):
+            if not self._resolve_challenge(page, deadline):
+                title = page.title()
+                raise ScrapeError(
+                    "ANTIBOT",
+                    f"Antibot challenge did not resolve (http {status}, title \"{title}\")",
+                )
+            status = 200
+
+        # Behave like a reader before navigating on.
+        try:
+            page.mouse.wheel(0, 300)
+        except Exception:
+            pass
+        self._session_ok_at = time.time()
+        logger.info("Ozon session warmed (http %s, title \"%s\")", status, page.title()[:60])
+
+    def _resolve_challenge(self, page, deadline: float) -> bool:
+        """True when the page is back on the real site before the deadline."""
+        slider = None
+        try:
+            slider = page.wait_for_selector("#captcha-container", timeout=3000)
+        except Exception:
+            slider = None
+
+        if slider is not None:
+            logger.info("Slide-puzzle captcha detected; solving")
+            solved = self._solve_slider(page)
+            if not solved:
+                return False
+            # The widget reloads the page itself after a successful solve.
+            for _ in range(10):
+                if time.time() > deadline:
+                    break
+                page.wait_for_timeout(1000)
+                if not self._looks_challenged(page.title(), None):
+                    return True
+            return not self._looks_challenged(page.title(), None)
+
+        # Plain JS challenge: let it post /abt/result, then reload once.
+        if time.time() > deadline - 8:
+            return False
+        page.reload(timeout=15000, wait_until="domcontentloaded")
+        page.wait_for_timeout(4000)
+        return not self._looks_challenged(page.title(), None)
+
+    def _solve_slider(self, page) -> bool:
+        """
+        Ozon's escalated captcha is a slide puzzle: #image carries dark piece
+        outlines, #puzzle is the draggable piece (PNG with alpha). We locate
+        the outline whose border matches the piece silhouette in the piece's
+        row, then drag #slider by the CSS delta with human-like motion.
+        """
+        import io
+        import random
+        import urllib.request
+
+        import numpy as np
+        from PIL import Image
+
+        try:
+            scale = float(
+                page.eval_on_selector(
+                    "#captcha",
+                    "el => (getComputedStyle(el).getPropertyValue('--scale') || '1').trim()",
+                )
+                or 1.0
+            )
+            img_url = page.eval_on_selector("#image", "el => el.src")
+            pz_url = page.eval_on_selector("#puzzle", "el => el.src")
+            pz_top = float(page.eval_on_selector("#puzzle", "el => parseFloat(el.style.top) || 0"))
+            pz_left = float(page.eval_on_selector("#puzzle", "el => parseFloat(el.style.left) || 0"))
+        except Exception as e:
+            logger.warning("slider: cannot read widget geometry: %s", e)
+            return False
+
+        try:
+            with urllib.request.urlopen(img_url, timeout=10) as r:
+                bg = np.asarray(Image.open(io.BytesIO(r.read())).convert("L"), dtype=np.float32)
+            with urllib.request.urlopen(pz_url, timeout=10) as r:
+                pz = np.asarray(Image.open(io.BytesIO(r.read())).convert("RGBA"), dtype=np.float32)
+        except Exception as e:
+            logger.warning("slider: cannot download captcha images: %s", e)
+            return False
+
+        mask = pz[:, :, 3] > 100
+        ys, xs = np.where(mask)
+        if len(xs) == 0:
+            return False
+        piece = mask[ys.min() : ys.max() + 1, xs.min() : xs.max() + 1]
+        h, w = piece.shape
+
+        # Ring = silhouette border (dilate/erode via shifts, radius 2).
+        def dilate(m, r):
+            out = m.copy()
+            for _ in range(r):
+                out = out | np.roll(out, 1, 0) | np.roll(out, -1, 0) | np.roll(out, 1, 1) | np.roll(out, -1, 1)
+            return out
+
+        def erode(m, r):
+            out = m.copy()
+            for _ in range(r):
+                out = out & np.roll(out, 1, 0) & np.roll(out, -1, 0) & np.roll(out, 1, 1) & np.roll(out, -1, 1)
+            return out
+
+        ring = dilate(piece, 2) & ~erode(piece, 2)
+        ring_px = np.argwhere(ring)  # (y, x) offsets
+        if len(ring_px) == 0:
+            return False
+
+        y0 = int(round(pz_top / scale))
+        if y0 < 0 or y0 + h > bg.shape[0]:
+            return False
+
+        # Outlines are darker than the blue backdrop; dilate for tolerance.
+        # The 25th percentile separates outline strokes from background detail
+        # across lighting variants (verified offline on captured widgets).
+        best_s, best_score = None, -1.0
+        for dy in range(-2, 3, 2):
+            if y0 + dy < 0 or y0 + dy + h > bg.shape[0]:
+                continue
+            band = bg[y0 + dy : y0 + dy + h, :]
+            dark = dilate(band < np.percentile(band, 25), 2)
+            for s in range(0, band.shape[1] - w, 2):
+                score = dark[ring_px[:, 0], s + ring_px[:, 1]].mean()
+                if score > best_score:
+                    best_score, best_s = score, s
+
+        if best_s is None or best_score < 0.6:
+            logger.warning("slider: no matching outline (score=%s)", best_score)
+            return False
+
+        delta_css = (best_s - xs.min() - pz_left / scale) * scale
+        logger.info("slider: delta=%.1fpx score=%.2f", delta_css, best_score)
+
+        box = page.query_selector("#slider").bounding_box()
+        if not box:
+            return False
+        sx, sy = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+
+        page.mouse.move(sx, sy)
+        page.wait_for_timeout(random.randint(100, 300))
+        page.mouse.down()
+        steps = random.randint(20, 28)
+        for i in range(1, steps + 1):
+            t = i / steps
+            ease = 1 - (1 - t) ** 3
+            jitter = 0 if i == steps else random.uniform(-1.5, 1.5)
+            page.mouse.move(sx + delta_css * ease + jitter, sy + random.uniform(-1, 1))
+            page.wait_for_timeout(random.randint(8, 26))
+        page.mouse.move(sx + delta_css + 2, sy)
+        page.wait_for_timeout(random.randint(40, 90))
+        page.mouse.move(sx + delta_css, sy)
+        page.wait_for_timeout(random.randint(30, 60))
+        page.mouse.up()
+        return True
+
+    def _scrape(self, query: str, page_num: int, budget_ms: int) -> dict:
+        start = time.time()
+        budget_ms = max(budget_ms, 10000)
+
+        def elapsed_ms():
+            return int((time.time() - start) * 1000)
+
+        def remaining_ms():
+            return budget_ms - elapsed_ms()
+
+        # Rotate proactively before Ozon escalates to a visual captcha.
+        if self._searches >= MAX_SEARCHES_PER_SESSION:
+            self._restart_session("session search quota reached")
+
+        page = self._get_page()
+
+        needs_warm = (
+            self._session_ok_at == 0.0
+            or (time.time() - self._session_ok_at) > SESSION_MAX_IDLE_SECONDS
+        )
+        if needs_warm:
+            self._warm_session(page, max(15000, budget_ms // 2))
+
+        url = f"{BASE_URL}/search/?text={urllib.parse.quote(query)}"
+        if page_num > 1:
+            url += f"&page={page_num}"
+
+        response = page.goto(url, timeout=max(5000, remaining_ms()), wait_until="domcontentloaded")
+        status = response.status if response else 0
+        page.wait_for_timeout(3000)
+
+        title = page.title()
+        if self._looks_challenged(title, status):
+            # Session lapsed mid-flight: one warm retry, then give up.
+            logger.warning("Search hit challenge (http %s); re-warming", status)
+            self._warm_session(page, max(15000, remaining_ms()))
+            response = page.goto(url, timeout=max(5000, remaining_ms()), wait_until="domcontentloaded")
+            status = response.status if response else 0
+            page.wait_for_timeout(3000)
+            title = page.title()
+            if self._looks_challenged(title, status):
+                raise ScrapeError("ANTIBOT", f"Blocked with http {status} (title \"{title}\")")
+
+        try:
+            extracted = page.evaluate(self._extraction_js)
+        except Exception as e:
+            logger.error("Extraction failed: %s", e)
+            extracted = None
+
+        items = (extracted or {}).get("items") or []
+        mode = (extracted or {}).get("mode") or "failed"
+
+        if not items:
+            try:
+                page.screenshot(path="/app/public/debug_empty.png", full_page=True)
+                with open("/app/public/debug_empty.html", "w", encoding="utf-8") as f:
+                    f.write(page.content())
+            except Exception:
+                pass
+        else:
+            self._session_ok_at = time.time()
+            self._searches += 1
+
+        return {
+            "items": items,
+            "meta": {
+                "provider": "ozon",
+                "took_ms": elapsed_ms(),
+                "extraction_mode": mode,
+                "total_hint": len(items),
+            },
+        }
+
+    def _health(self) -> dict:
+        return {
+            "status": "ok",
+            "uptime_ms": int((time.time() - START_TIME) * 1000),
+            "session_warmed": self._session_ok_at > 0,
+            "session_searches": self._searches,
+            "proxy": bool(PROXY),
+        }
+
+    # -- API called from request threads -------------------------------------
+
+    def submit(self, fn, *args):
+        out = queue.Queue()
+        self._queue.put((fn, args, out))
+        ok, payload = out.get(timeout=JOB_TIMEOUT_SECONDS)
+        if ok:
+            return payload
+        raise ScrapeError(payload.get("code", "INTERNAL"), payload.get("message", "unknown error"))
+
+    def scrape(self, query: str, page_num: int, budget_ms: int) -> dict:
+        return self.submit(self._scrape, query, page_num, budget_ms)
+
+    def health(self) -> dict:
+        return self.submit(self._health)
+
+
+WORKER = BrowserWorker()
+
+
+@app.on_event("startup")
+def _startup():
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ozon_extract.js")
+    with open(path, "r", encoding="utf-8") as f:
+        WORKER._extraction_js = f.read()
+    logger.info("ozon extraction script loaded (%d chars)", len(WORKER._extraction_js))
+    WORKER._thread.start()
+
 
 @app.api_route("/health", methods=["GET", "HEAD"])
 def health():
     return {
         "status": "ok",
-        "uptime_ms": int((time.time() - START_TIME) * 1000)
+        "uptime_ms": int((time.time() - START_TIME) * 1000),
+        "proxy": bool(PROXY),
     }
+
 
 @app.post("/scrape")
 def scrape(req: ScrapeRequest):
     if req.provider != "ozon":
-        raise HTTPException(status_code=500, detail={"error": {"code": "INTERNAL", "message": "Only ozon is supported"}})
-    
-    start_time = time.time()
-    
-    url = f"https://www.ozon.ru/search/?text={urllib.parse.quote(req.query)}"
-    if req.page > 1:
-        url += f"&page={req.page}"
-        
+        raise HTTPException(
+            status_code=500,
+            detail={"error": {"code": "INTERNAL", "message": "Only ozon is supported"}},
+        )
+
+    started = time.time()
     try:
-        # Load the page
-        page.set.timeouts(page_load=req.timeout_ms / 1000)
-        page.get(url)
-        
-        # Check if we got blocked
-        if "captcha" in page.url or "challenge" in page.url:
-            page.get_screenshot(path='/app/public', name='debug_captcha.png', full_page=True)
-            return {"error": {"code": "ANTIBOT", "message": "Captcha detected by DrissionPage", "took_ms": int((time.time() - start_time) * 1000)}}
-            
-        # Try to find __NEXT_DATA__
-        next_data_elem = page.ele('#__NEXT_DATA__', timeout=3)
-        items = []
-        extraction_mode = "failed"
-        
-        def collect_candidates(node, found, depth=0, seen=None):
-            if seen is None:
-                seen = set()
-            if depth > 12 or node is None or not isinstance(node, (dict, list)) or len(found) >= 200:
-                return found
-                
-            node_id = id(node)
-            if node_id in seen:
-                return found
-            seen.add(node_id)
-            
-            if isinstance(node, list):
-                for child in node:
-                    collect_candidates(child, found, depth + 1, seen)
-                return found
-                
-            has_id = node.get("sku") or node.get("skuId") or node.get("productId") or node.get("id")
-            title = node.get("title") or node.get("name") or node.get("text")
-            price = node.get("price") or node.get("finalPrice") or node.get("cardPrice") or node.get("priceValue")
-            link = node.get("link") or (node.get("action", {}).get("link") if isinstance(node.get("action"), dict) else None) or node.get("url") or node.get("deeplink")
-            
-            if has_id and isinstance(title, str) and len(title) > 2 and (price is not None or link):
-                found.append(node)
-                
-            for val in node.values():
-                if isinstance(val, (dict, list)):
-                    collect_candidates(val, found, depth + 1, seen)
-                    
-            return found
-        
-        if next_data_elem:
-            try:
-                data = json.loads(next_data_elem.text)
-                
-                expanded = []
-                # Find widgetStates
-                buckets = [
-                    data.get("props", {}).get("pageProps", {}).get("state", {}).get("data", {}).get("widgetStates", {}),
-                    data.get("props", {}).get("pageProps", {}).get("initialState", {}).get("widgetStates", {}),
-                    data.get("widgetStates", {})
-                ]
-                
-                for bucket in buckets:
-                    if isinstance(bucket, dict):
-                        for val in bucket.values():
-                            if isinstance(val, str):
-                                try:
-                                    expanded.append(json.loads(val))
-                                except:
-                                    pass
-                            else:
-                                expanded.append(val)
-                
-                if not expanded:
-                    expanded.append(data)
-                    
-                candidates = []
-                for bucket in expanded:
-                    collect_candidates(bucket, candidates)
-                    
-                seen_ids = set()
-                for entry in candidates:
-                    link = entry.get("link") or (entry.get("action", {}).get("link") if isinstance(entry.get("action"), dict) else None) or entry.get("url") or entry.get("deeplink")
-                    title = str(entry.get("title") or entry.get("name") or entry.get("text") or "").strip()
-                    ext_id = str(entry.get("sku") or entry.get("skuId") or entry.get("productId") or entry.get("id") or "")
-                    
-                    if not ext_id or not title or not link:
-                        continue
-                        
-                    if ext_id in seen_ids:
-                        continue
-                    seen_ids.add(ext_id)
-                    
-                    price_val = entry.get("price") or entry.get("finalPrice") or entry.get("cardPrice") or entry.get("priceValue")
-                    price_str = str(price_val).replace('\u2009', '').replace('\xa0', '').replace(' ', '').replace('₽', '').replace(',', '.')
-                    
-                    try:
-                        price_amount = int(float(price_str) * 100)
-                    except:
-                        price_amount = None
-                        
-                    items.append({
-                        "external_id": ext_id,
-                        "title": title,
-                        "brand": entry.get("brand") or entry.get("brandName") or entry.get("vendor"),
-                        "price_amount": price_amount,
-                        "old_price_amount": None,
-                        "currency": "RUB",
-                        "image_url": None,
-                        "product_url": f"https://www.ozon.ru{link}" if link.startswith("/") else link,
-                        "rating_value": None,
-                        "rating_count": None,
-                        "availability_status": "in_stock" if price_amount else None,
-                        "stock_quantity": None,
-                        "raw_payload": None
-                    })
-                
-                if items:
-                    extraction_mode = "next_data"
-            except Exception as e:
-                logger.error(f"Failed to parse NEXT_DATA: {e}")
-        
-        if not items:
-            # Save screenshot for debugging empty results
-            try:
-                page.get_screenshot(path='/app/public', name='debug_empty.png')
-                with open('/app/public/debug_empty.html', 'w', encoding='utf-8') as f:
-                    f.write(page.html)
-            except Exception as e:
-                import traceback
-                print(traceback.format_exc(), flush=True)
-                logger.error(f"Failed to save screenshot: {e}")
-                
-        took_ms = int((time.time() - start_time) * 1000)
-        
+        return WORKER.scrape(req.query, req.page, req.timeout_ms)
+    except ScrapeError as e:
         return {
-            "items": items,
-            "meta": {
-                "provider": "ozon",
-                "took_ms": took_ms,
-                "extraction_mode": extraction_mode,
-                "total_hint": len(items)
+            "error": {
+                "code": e.code,
+                "message": str(e),
+                "took_ms": int((time.time() - started) * 1000),
             }
         }
-        
-    except Exception as e:
-        logger.error(f"DrissionPage Error: {e}")
-        return {"error": {"code": "INTERNAL", "message": str(e), "took_ms": int((time.time() - start_time) * 1000)}}
+    except queue.Empty:
+        return {
+            "error": {
+                "code": "INTERNAL",
+                "message": "scraper worker timed out",
+                "took_ms": int((time.time() - started) * 1000),
+            }
+        }

@@ -20,13 +20,14 @@ use Illuminate\Support\Facades\Log;
 use Throwable;
 
 /**
- * Ozon provider backed by the Playwright scraping service.
+ * Ozon provider backed by the Camoufox scraping service.
  *
- * The public search page (`https://www.ozon.ru/search/?text=...`) is rendered by
- * the in-cluster Playwright service, which extracts the product tiles and hands
- * back normalised snake_case dicts. Unlike the previous Seller-API integration
- * this IS a real search engine: the free-text query is pushed down to Ozon and
- * relevance is theirs, so no local text matching happens here.
+ * The public search page (`https://www.ozon.ru/search/?text=...`) is rendered
+ * by the in-cluster Camoufox (anti-detect Firefox) service over a sticky RU
+ * residential proxy, which extracts the product tiles and hands back
+ * normalised snake_case dicts. Chromium-based browsers fail Ozon's ABT
+ * challenge even through clean residential IPs, so this provider deliberately
+ * uses a different scraper service than the other providers.
  *
  * READ-ONLY: the scraper only ever performs GET navigations to public search
  * pages. Nothing in this class can create, update or price anything on Ozon.
@@ -39,11 +40,15 @@ class OzonProductProvider implements ProductProviderInterface
      */
     private const MAX_RESULTS_PER_PAGE = 36;
 
-    /** Budget for a search scrape: page load + extraction. */
-    private const SEARCH_TIMEOUT_MS = 8000;
+    /**
+     * Budget for a search scrape: page load + extraction. A cold session
+     * additionally pays a one-off antibot warm-up on the homepage (~15-20s);
+     * warm searches finish well inside this budget.
+     */
+    private const SEARCH_TIMEOUT_MS = 45000;
 
-    /** Health probes get a shorter budget so a slow site fails fast. */
-    private const HEALTH_TIMEOUT_MS = 5000;
+    /** Health probes share the search budget: a cold warm-up must fit too. */
+    private const HEALTH_TIMEOUT_MS = 45000;
 
     /** Cheap, always-populated query used as the health canary. */
     private const HEALTH_CANARY_QUERY = 'test';
@@ -89,7 +94,7 @@ class OzonProductProvider implements ProductProviderInterface
     }
 
     /**
-     * A down Playwright service disables the provider instead of failing
+     * A down scraping service disables the provider instead of failing
      * searches: the aggregator simply skips it. The reachability verdict is
      * cached for 30 seconds inside the client, so a search burst pings the
      * service at most once.
@@ -128,7 +133,7 @@ class OzonProductProvider implements ProductProviderInterface
     public function healthCheck(): ProviderHealthData
     {
         if (! $this->scraper->isReachable()) {
-            return $this->health('down', null, 'Playwright service unreachable');
+            return $this->health('down', null, 'Ozon scraper service unreachable');
         }
 
         $startedAtMs = microtime(true);
@@ -237,7 +242,7 @@ class OzonProductProvider implements ProductProviderInterface
             'page' => $query->page,
             'per_page' => $query->perPage,
             'timeout_ms' => self::SEARCH_TIMEOUT_MS,
-            'transport' => 'playwright',
+            'transport' => 'camoufox',
         ];
     }
 

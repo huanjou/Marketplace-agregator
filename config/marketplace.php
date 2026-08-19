@@ -21,7 +21,7 @@ return [
 
     'drissionpage' => [
         'base_url' => env('DRISSIONPAGE_URL', 'http://drissionpage:8000'),
-        'timeout_ms' => (int) env('DRISSIONPAGE_TIMEOUT_MS', 20000),
+        'timeout_ms' => (int) env('DRISSIONPAGE_TIMEOUT_MS', 50000),
     ],
 
     /*
