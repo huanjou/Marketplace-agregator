@@ -1,58 +1,117 @@
-<p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
+# Агрегатор маркетплейсов
 
-<p align="center">
-<a href="https://github.com/laravel/framework/actions"><img src="https://github.com/laravel/framework/workflows/tests/badge.svg" alt="Build Status"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/dt/laravel/framework" alt="Total Downloads"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/v/laravel/framework" alt="Latest Stable Version"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
-</p>
+Сервис агрегации товарной выдачи Ozon, Wildberries и Яндекс Маркета:
+публичный поиск по всем площадкам сразу, админ-панель на Filament с логами
+синхронизации и управлением провайдерами.
 
-## About Laravel
+Стек: Laravel 12, Filament 3, Livewire 3, PostgreSQL, Redis, Docker Compose.
+Скрапинг: Playwright-пул браузеров (WB / Яндекс Маркет) и Camoufox-бэкенд
+(Ozon, обход ABT-антибота + автосолвер капчи-слайдера).
 
-Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:
+## Требования
 
-- [Simple, fast routing engine](https://laravel.com/docs/routing).
-- [Powerful dependency injection container](https://laravel.com/docs/container).
-- Multiple back-ends for [session](https://laravel.com/docs/session) and [cache](https://laravel.com/docs/cache) storage.
-- Expressive, intuitive [database ORM](https://laravel.com/docs/eloquent).
-- Database agnostic [schema migrations](https://laravel.com/docs/migrations).
-- [Robust background job processing](https://laravel.com/docs/queues).
-- [Real-time event broadcasting](https://laravel.com/docs/broadcasting).
+- Docker и Docker Compose (весь стек, включая PHP, живёт в контейнерах);
+- на хосте ничего ставить не нужно: `php`/`composer`/`node` вызываются через `make …` внутри контейнеров.
 
-Laravel is accessible, powerful, and provides tools required for large, robust applications.
+## Быстрый старт
 
-## Learning Laravel
-
-Laravel has the most extensive and thorough [documentation](https://laravel.com/docs) and video tutorial library of all modern web application frameworks, making it a breeze to get started with the framework.
-
-In addition, [Laracasts](https://laracasts.com) contains thousands of video tutorials on a range of topics including Laravel, modern PHP, unit testing, and JavaScript. Boost your skills by digging into our comprehensive video library.
-
-You can also watch bite-sized lessons with real-world projects on [Laravel Learn](https://laravel.com/learn), where you will be guided through building a Laravel application from scratch while learning PHP fundamentals.
-
-## Agentic Development
-
-Laravel's predictable structure and conventions make it ideal for AI coding agents like Claude Code, Cursor, and GitHub Copilot. Install [Laravel Boost](https://laravel.com/docs/ai) to supercharge your AI workflow:
+Одной командой (идемпотентно, можно перезапускать):
 
 ```bash
-composer require laravel/boost --dev
-
-php artisan boost:install
+./start.sh            # .env + up + key:generate + migrate + seed
+./start.sh --build    # то же с пересборкой образов
 ```
 
-Boost provides your agent 15+ tools and skills that help agents build Laravel applications while following best practices.
+Или вручную:
 
-## Contributing
+```bash
+cp .env.example .env
 
-Thank you for considering contributing to the Laravel framework! The contribution guide can be found in the [Laravel documentation](https://laravel.com/docs/contributions).
+make up                                   # собрать и поднять все контейнеры
+make artisan cmd='key:generate'           # сгенерировать APP_KEY в .env
+make migrate                              # накатить миграции
+make seed                                 # админ + справочник провайдеров
+```
 
-## Code of Conduct
+После этого:
 
-In order to ensure that the Laravel community is welcoming to all, please review and abide by the [Code of Conduct](https://laravel.com/docs/contributions#code-of-conduct).
+| Что | Где |
+|---|---|
+| Публичный поиск (без авторизации) | http://localhost:8080/ |
+| Админ-панель (логи, провайдеры) | http://localhost:8080/admin |
+| Логин админа из сидера | `admin@example.com` / `password` |
 
-## Security Vulnerabilities
+## Состав стека
 
-If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
+| Контейнер | Роль |
+|---|---|
+| `app` | PHP-FPM (Laravel) |
+| `nginx` | веб-фронт, порт 8080 |
+| `postgres` | PostgreSQL (основное хранилище) |
+| `redis` | кэш поисковой выдачи, очереди |
+| `queue` | воркер очередей (health-check провайдеров, прогрев кэша) |
+| `scheduler` | `schedule:work` (периодические задачи) |
+| `playwright` | пул браузеров: скраперы WB и Яндекс Маркета |
+| `drissionpage` | Camoufox-бэкенд скрапера Ozon (порт 8000) |
 
-## License
+## Ключевые переменные окружения
 
-The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+Полный список — в `.env.example`. Самое важное:
+
+- `OZON_PROXY_URL` — **липкий российский резидентный прокси** для Ozon
+  (`http://user:pass@host:port`). Антибот Ozon привязывает challenge-куки к
+  IP, поэтому линия должна держать один IP всю сессию — ротация на каждый
+  запрос ломает скрапинг. Без прокси Ozon почти всегда отдаёт 403/капчу.
+- `PROXY_URL` — опциональный прокси для пула Playwright (WB/Яндекс по умолчанию ходят напрямую).
+- `MARKETPLACE_OZON_ENABLED`, `MARKETPLACE_YANDEX_MARKET_ENABLED`,
+  `MARKETPLACE_WILDBERRIES_ENABLED`, `MARKETPLACE_FAKE_ENABLED` — включение провайдеров.
+- `*_CACHE_TTL_SECONDS` — TTL кэша выдачи по каждому провайдеру и общий
+  `marketplace.search.cache_ttl_seconds`: весь отсортированный результат
+  кэшируется в Redis под ключом без номера страницы, поэтому пагинация
+  режется из памяти без повторных запросов к скраперам.
+- `PLAYWRIGHT_URL`, `DRISSIONPAGE_URL` (в `config/marketplace.php`) — адреса скрапящих сервисов.
+
+## Команды (Makefile)
+
+```bash
+make up / down / restart / build / logs
+make shell                 # шелл контейнера app
+make artisan cmd='route:list'
+make composer cmd='install'
+make migrate / make seed
+make test                  # PHPUnit
+make playwright-restart    # перезапустить скрапер-пул
+```
+
+## Как устроен поиск
+
+1. `ProductSearchService` нормализует запрос и смотрит кэш (Redis).
+2. Промах — fan-out по включённым провайдерам (`app/Services/Providers/*`),
+   каждый скрапит свою площадку и возвращает весь набор совпадений.
+3. `ResultAggregator` дедуплицирует и сортирует объединённый набор; страница
+   режется из полного набора при чтении (`ProductSearchResult::forPage`).
+4. Результат кэшируется целиком и зеркалируется в таблицы `search_caches` /
+   `search_cache_items` (наблюдаемость в админке).
+5. Каждый поиск пишется в `sync_logs` — виден только в админке после авторизации.
+
+## Тесты
+
+```bash
+make test
+```
+
+Юнит- и фич-тесты пайплайна работают на фикстурах (`tests/Fixtures`);
+тесты, помеченные как live-network (смоки админки, пагинация по реальным
+площадкам), могут падать без сети/прокси — это ожидаемо.
+
+## Структура
+
+```
+app/Services/Providers/   провайдеры маркетплейсов + мапперы
+app/Services/             агрегация, дедупликация, кэш поиска
+app/Filament/             админ-панель (ресурсы, дашборд поиска)
+app/Livewire/             публичный поиск на главной
+docker/playwright/        скраперы WB / Яндекс Маркета (Node + Playwright)
+docker/drissionpage/      скрапер Ozon (Python + Camoufox, solver капчи)
+tests/                    PHPUnit: unit + feature + фикстуры
+```
