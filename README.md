@@ -8,6 +8,14 @@
 Скрапинг: Playwright-пул браузеров (WB / Яндекс Маркет) и Camoufox-бэкенд
 (Ozon, обход ABT-антибота + автосолвер капчи-слайдера).
 
+## Интерфейс главной страницы
+<img width="2530" height="1299" alt="image" src="https://github.com/user-attachments/assets/e71c2012-638c-4fc0-b4ed-381b3dbd17b8" />
+
+## Админ панель
+<img width="1731" height="1289" alt="image" src="https://github.com/user-attachments/assets/912e8c3d-3999-4621-a3dc-b5762e9da4a8" />
+<img width="1412" height="863" alt="image" src="https://github.com/user-attachments/assets/1e880ecf-d78d-47b1-8169-19ab6f1ef425" />
+
+
 ## Требования
 
 - Docker и Docker Compose (весь стек, включая PHP, живёт в контейнерах);
