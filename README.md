@@ -14,6 +14,7 @@
 ## Админ панель
 <img width="1731" height="1289" alt="image" src="https://github.com/user-attachments/assets/912e8c3d-3999-4621-a3dc-b5762e9da4a8" />
 <img width="1412" height="863" alt="image" src="https://github.com/user-attachments/assets/1e880ecf-d78d-47b1-8169-19ab6f1ef425" />
+<img width="1408" height="739" alt="image" src="https://github.com/user-attachments/assets/d76ff26f-6266-47ae-ad19-aa69e6d3803a" />
 
 
 ## Требования
