@@ -17,7 +17,7 @@ class ProviderSeeder extends Seeder
             [
                 'name' => 'Demo Provider',
                 'provider_class' => FakeProductProvider::class,
-                'enabled' => true,
+                'enabled' => false,
                 'supports_realtime_search' => true,
                 'supports_catalog_sync' => false,
                 'capabilities' => [
@@ -37,7 +37,7 @@ class ProviderSeeder extends Seeder
             [
                 'name' => 'Ozon',
                 'provider_class' => 'App\\Services\\Providers\\Ozon\\OzonProductProvider',
-                'enabled' => false,
+                'enabled' => true,
                 'supports_realtime_search' => true,
                 'supports_catalog_sync' => true,
                 'capabilities' => [
@@ -56,7 +56,7 @@ class ProviderSeeder extends Seeder
             [
                 'name' => 'Yandex Market',
                 'provider_class' => 'App\\Services\\Providers\\YandexMarket\\YandexMarketProductProvider',
-                'enabled' => false,
+                'enabled' => true,
                 'supports_realtime_search' => true,
                 'supports_catalog_sync' => true,
                 'capabilities' => [
