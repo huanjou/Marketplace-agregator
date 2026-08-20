@@ -72,7 +72,7 @@ class PublicProductSearch extends Component
         // The fake provider exists for tests/demo only; it must never leak
         // synthetic items into the public search page.
         return app(ProviderRegistry::class)
-            ->all()
+            ->enabled()
             ->except(ProviderCode::Fake->value)
             ->map(static fn ($provider): string => $provider->displayName())
             ->all();

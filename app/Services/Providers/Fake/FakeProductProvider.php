@@ -64,7 +64,13 @@ class FakeProductProvider implements ProductProviderInterface
 
     public function isEnabled(): bool
     {
-        return (bool) config('marketplace.providers.fake.enabled', false);
+        try {
+            $dbEnabled = \App\Models\Provider::query()->where('code', $this->code())->value('enabled');
+        } catch (\Throwable $e) {
+            $dbEnabled = null;
+        }
+
+        return $dbEnabled ?? (bool) config('marketplace.providers.fake.enabled', false);
     }
 
     /**
