@@ -184,42 +184,7 @@ services:
     networks:
       - agregator
 
-  scheduler:
-    build:
-      context: .
-      dockerfile: docker/php/Dockerfile
-    image: agregator-app
-    container_name: agregator-scheduler
-    restart: unless-stopped
-    working_dir: /var/www/html
-    command: php artisan schedule:work
-    volumes:
-      - .:/var/www/html
-    environment:
-      APP_NAME: Agregator
-      APP_ENV: local
-      APP_DEBUG: "true"
-      APP_URL: http://localhost:8080
-      DB_CONNECTION: pgsql
-      DB_HOST: postgres
-      DB_PORT: 5432
-      DB_DATABASE: agregator
-      DB_USERNAME: agregator
-      DB_PASSWORD: secret
-      CACHE_STORE: redis
-      QUEUE_CONNECTION: redis
-      SESSION_DRIVER: database
-      REDIS_HOST: redis
-      REDIS_PORT: 6379
-    depends_on:
-      app:
-        condition: service_started
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    networks:
-      - agregator
+
 
   node:
     image: node:20-alpine

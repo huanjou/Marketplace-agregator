@@ -23,6 +23,7 @@ RUN groupmod -g ${GID} www-data \
 WORKDIR /var/www/html
 
 COPY docker/php/php.ini /usr/local/etc/php/conf.d/custom.ini
+COPY docker/php/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 
 # Re-applies ownership of the bind-mounted storage/ and bootstrap/cache/ trees
 # on every start, so root-owned leftovers never break the php-fpm workers.
@@ -31,4 +32,4 @@ RUN chmod +x /usr/local/bin/entrypoint.sh
 
 EXPOSE 9000
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
-CMD ["php-fpm"]
+CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]
