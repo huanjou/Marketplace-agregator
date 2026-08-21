@@ -36,7 +36,18 @@ else
     "${COMPOSE[@]}" up -d
 fi
 
-echo "==> waiting for the app container"
+echo "==> waiting for the app container to initialize"
+for i in $(seq 1 40); do
+    if "${COMPOSE[@]}" exec -T app php -v >/dev/null 2>&1; then
+        break
+    fi
+    sleep 3
+done
+
+echo "==> installing composer dependencies"
+"${COMPOSE[@]}" exec -T app composer install -n --no-progress
+
+echo "==> checking artisan"
 for i in $(seq 1 40); do
     if "${COMPOSE[@]}" exec -T app php artisan --version >/dev/null 2>&1; then
         break
