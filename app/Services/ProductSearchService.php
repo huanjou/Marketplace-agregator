@@ -6,6 +6,7 @@ namespace App\Services;
 
 use App\Contracts\ProductProviderInterface;
 use App\DTO\Marketplace\ExternalProductData;
+use App\DTO\Search\ProductSearchFilters;
 use App\DTO\Search\ProductSearchQuery;
 use App\DTO\Search\ProductSearchResult;
 use App\Models\Provider;
@@ -92,6 +93,7 @@ class ProductSearchService
         }
 
         $query = $this->enrichWithAiSearchUrls($query, $providers);
+        $query = $this->applyAiPriceBounds($query);
 
         $fanOut = $this->fanOut($providers, $query);
 
@@ -187,6 +189,57 @@ class ProductSearchService
             providerCodes: $query->providerCodes,
             timeoutMs: $query->timeoutMs,
             searchUrls: array_intersect_key($urls, $providers->all()),
+        );
+    }
+
+    /**
+     * Fold the budget implied by the AI-built URLs into the query filters.
+     *
+     * Marketplaces often ignore price params on a headless SERP visit, so the
+     * bounds end up enforced again in ResultAggregator — this merge is what
+     * hands them over, and it also folds them into the cache fingerprint.
+     * Explicit user filters always win.
+     */
+    private function applyAiPriceBounds(ProductSearchQuery $query): ProductSearchQuery
+    {
+        if ($query->searchUrls === []) {
+            return $query;
+        }
+
+        $filters = $query->filters;
+
+        if ($filters->minPriceAmount !== null && $filters->maxPriceAmount !== null) {
+            return $query;
+        }
+
+        $bounds = PerplexitySearchUrlService::priceBounds($query->searchUrls);
+
+        $min = $filters->minPriceAmount ?? $bounds['min'];
+        $max = $filters->maxPriceAmount ?? $bounds['max'];
+
+        if ($min === $filters->minPriceAmount && $max === $filters->maxPriceAmount) {
+            return $query;
+        }
+
+        return new ProductSearchQuery(
+            text: $query->text,
+            filters: new ProductSearchFilters(
+                minPriceAmount: $min,
+                maxPriceAmount: $max,
+                currency: $filters->currency,
+                categoryId: $filters->categoryId,
+                externalCategoryIds: $filters->externalCategoryIds,
+                brands: $filters->brands,
+                minRating: $filters->minRating,
+                availability: $filters->availability,
+                attributes: $filters->attributes,
+            ),
+            sort: $query->sort,
+            page: $query->page,
+            perPage: $query->perPage,
+            providerCodes: $query->providerCodes,
+            timeoutMs: $query->timeoutMs,
+            searchUrls: $query->searchUrls,
         );
     }
 

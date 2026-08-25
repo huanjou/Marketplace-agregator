@@ -103,6 +103,47 @@ PROMPT;
     }
 
     /**
+     * Price bounds implied by a set of AI-built URLs, in minor units.
+     *
+     * Marketplaces routinely ignore price query params when a headless
+     * browser opens the SERP, so the budget parsed here is re-enforced on
+     * the PHP side as a hard filter before results are shown.
+     *
+     * @param array<string, string> $urls provider code => search URL
+     * @return array{min: int|null, max: int|null}
+     */
+    public static function priceBounds(array $urls): array
+    {
+        $min = null;
+        $max = null;
+
+        foreach ($urls as $url) {
+            parse_str((string) (parse_url($url, PHP_URL_QUERY) ?? ''), $params);
+
+            $maxRoubles = (int) ($params['price_to'] ?? $params['price_max'] ?? 0);
+
+            if ($maxRoubles <= 0) {
+                // Category slugs bake the budget in: …-do-60000-rubley.
+                if (preg_match('/-do-(\d+)-rubley/i', (string) parse_url($url, PHP_URL_PATH), $slug)) {
+                    $maxRoubles = (int) $slug[1];
+                }
+            }
+
+            $minRoubles = (int) ($params['price_from'] ?? $params['price_min'] ?? 0);
+
+            if ($maxRoubles > 0) {
+                $max = $max === null ? $maxRoubles * 100 : min($max, $maxRoubles * 100);
+            }
+
+            if ($minRoubles > 0) {
+                $min = $min === null ? $minRoubles * 100 : max($min, $minRoubles * 100);
+            }
+        }
+
+        return ['min' => $min, 'max' => $max];
+    }
+
+    /**
      * Resolve marketplace search URLs for a free-text user query.
      *
      * @return array<string, string> provider code => validated search URL

@@ -4,11 +4,14 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\DTO\Marketplace\ExternalProductData;
+use App\DTO\Search\ProductSearchFilters;
 use App\DTO\Search\ProductSearchQuery;
 use App\Livewire\PublicProductSearch;
 use App\Models\Provider;
 use App\Services\Ai\PerplexitySearchUrlService;
 use App\Services\ProductSearchService;
+use App\Services\ResultAggregator;
 use Illuminate\Foundation\Testing\DatabaseTransactions;
 use Illuminate\Support\Facades\Http;
 use Livewire\Livewire;
@@ -114,6 +117,56 @@ class AiSearchUrlTest extends TestCase
             ['ozon' => 'https://www.ozon.ru/category/sistemnye-bloki-do-100000-rubley/'],
             $urls,
         );
+    }
+
+    public function test_price_bounds_are_parsed_from_ai_urls(): void
+    {
+        $bounds = PerplexitySearchUrlService::priceBounds([
+            'ozon' => 'https://www.ozon.ru/search/?text=ноутбуки&price_to=60000',
+            'wildberries' => 'https://www.wildberries.ru/catalog/0/search.aspx?search=ноутбуки&price_max=60000&price_min=1000',
+        ]);
+
+        $this->assertSame(6_000_000, $bounds['max'], 'price bound must be in minor units');
+        $this->assertSame(100_000, $bounds['min']);
+
+        // Category slugs bake the budget into the path.
+        $bounds = PerplexitySearchUrlService::priceBounds([
+            'ozon' => 'https://www.ozon.ru/category/sistemnye-bloki-do-100000-rubley/',
+        ]);
+
+        $this->assertSame(10_000_000, $bounds['max']);
+        $this->assertNull($bounds['min']);
+
+        // The tightest bound wins when URLs disagree.
+        $bounds = PerplexitySearchUrlService::priceBounds([
+            'ozon' => 'https://www.ozon.ru/search/?text=x&price_to=60000',
+            'yandex_market' => 'https://market.yandex.ru/search?text=x&price_to=70000',
+        ]);
+
+        $this->assertSame(6_000_000, $bounds['max']);
+    }
+
+    public function test_over_budget_offers_are_cut_by_the_aggregator(): void
+    {
+        $query = new ProductSearchQuery(
+            text: 'ноутбуки',
+            filters: new ProductSearchFilters(maxPriceAmount: 6_000_000),
+        );
+
+        $items = [
+            new ExternalProductData(providerCode: 'ozon', title: 'в бюджете', priceAmount: 5_999_900),
+            new ExternalProductData(providerCode: 'ozon', title: 'дороже бюджета', priceAmount: 10_000_000),
+            new ExternalProductData(providerCode: 'wildberries', title: 'без цены', priceAmount: null),
+        ];
+
+        $result = app(ResultAggregator::class)->aggregate($items, $query);
+
+        $titles = array_map(static fn ($item) => $item->title, $result->items);
+
+        $this->assertContains('в бюджете', $titles);
+        $this->assertContains('без цены', $titles);
+        $this->assertNotContains('дороже бюджета', $titles);
+        $this->assertSame(2, $result->total);
     }
 
     public function test_resolved_urls_are_cached_for_repeat_queries(): void

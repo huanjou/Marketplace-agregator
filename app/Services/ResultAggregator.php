@@ -37,11 +37,22 @@ class ResultAggregator
     ): ProductSearchResult {
         $rawCount = count($items);
 
+        // Hard guarantee for budget queries: marketplaces ignore price params
+        // on headless SERP visits, so over-budget offers are cut here no
+        // matter which provider returned them.
+        $items = $this->applyPriceBounds($items, $query);
+        $priceBoundsActive = $query->filters->minPriceAmount !== null
+            || $query->filters->maxPriceAmount !== null;
+
         $deduplicated = $this->deduplicator->deduplicate($items);
         $sorted = $this->sort($deduplicated, $query);
 
         $deduplicatedCount = count($sorted);
-        $total = $this->totalFromProviderMeta($providerMeta) ?? $deduplicatedCount;
+        // Provider-reported totals describe their unfiltered match set; once a
+        // cutoff is active the honest number is the filtered set itself.
+        $total = $priceBoundsActive
+            ? $deduplicatedCount
+            : ($this->totalFromProviderMeta($providerMeta) ?? $deduplicatedCount);
 
         // No slicing here: the whole sorted set is what gets cached, and the
         // requested page is cut out by ProductSearchResult::forPage().
@@ -60,6 +71,41 @@ class ResultAggregator
                 ],
             ]),
         );
+    }
+
+    /**
+     * Drop offers whose known price violates the query's price bounds. Offers
+     * without a price are kept — hiding them wholesale on a budget query
+     * could empty a page, and they are clearly marked as price-less.
+     *
+     * @param ExternalProductData[] $items
+     * @return ExternalProductData[]
+     */
+    private function applyPriceBounds(array $items, ProductSearchQuery $query): array
+    {
+        $min = $query->filters->minPriceAmount;
+        $max = $query->filters->maxPriceAmount;
+
+        if ($min === null && $max === null) {
+            return $items;
+        }
+
+        return array_values(array_filter(
+            $items,
+            static function (ExternalProductData $item) use ($min, $max): bool {
+                $price = $item->priceAmount;
+
+                if ($price === null) {
+                    return true;
+                }
+
+                if ($max !== null && $price > $max) {
+                    return false;
+                }
+
+                return ! ($min !== null && $price < $min);
+            }
+        ));
     }
 
     /**
