@@ -118,6 +118,10 @@ class ProductSearchService
             providerMeta: array_merge($result->providerMeta, $fanOut['meta'], [
                 'cache' => ['hit' => false],
                 PerplexitySearchUrlService::META_KEY => $query->searchUrls,
+                // The set is cached under THESE filters (AI price bounds
+                // included); callers need them to hit the same fingerprint
+                // when they request another page.
+                'effective_filters' => $query->filters->toArray(),
             ]),
         );
 

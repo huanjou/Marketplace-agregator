@@ -74,6 +74,16 @@ class PublicProductSearch extends Component
     /** Whether the finished search actually used AI-built SERP URLs. */
     public bool $aiUrlsApplied = false;
 
+    /**
+     * Filters under which the current result set was harvested (including the
+     * price bounds derived from the AI-built URLs). Pagination and re-runs
+     * must resend the exact same filters, otherwise the cache fingerprint
+     * changes and every page flip re-runs the whole scraper fan-out.
+     *
+     * @var array<string, mixed>|null
+     */
+    public ?array $resultFilters = null;
+
     public function mount(): void
     {
         $this->providerCodes = array_keys($this->providerOptions());
@@ -135,6 +145,7 @@ class PublicProductSearch extends Component
         $this->providerErrors = null;
         $this->searchUrls = [];
         $this->aiUrlsApplied = false;
+        $this->resultFilters = null;
         $this->status = 'Ищем ссылки...';
 
         $this->dispatch('resolve-search-urls');
@@ -182,9 +193,16 @@ class PublicProductSearch extends Component
             return;
         }
 
+        // Resend the filters the result set was cached under; on a fresh
+        // search they are empty and the service derives the AI bounds itself.
+        $filtersArray = is_array($this->resultFilters) ? $this->resultFilters : [];
+
         $query = new ProductSearchQuery(
             text: $text,
-            filters: new ProductSearchFilters(),
+            filters: new ProductSearchFilters(
+                minPriceAmount: isset($filtersArray['min_price_amount']) ? (int) $filtersArray['min_price_amount'] : null,
+                maxPriceAmount: isset($filtersArray['max_price_amount']) ? (int) $filtersArray['max_price_amount'] : null,
+            ),
             sort: new ProductSort(),
             page: max(1, $this->page),
             perPage: $this->perPage,
@@ -210,6 +228,12 @@ class PublicProductSearch extends Component
 
         $this->searched = true;
         $this->lastSearchMs = (int) round((microtime(true) - $startedAt) * 1000);
+        // Remember the effective filters (the AI price bounds are folded in
+        // by the service and reported back) so pagination hits the same cache
+        // fingerprint instead of re-running the scrapers.
+        $this->resultFilters = is_array($result->providerMeta['effective_filters'] ?? null)
+            ? $result->providerMeta['effective_filters']
+            : $query->filters->toArray();
         $this->results = array_map(
             fn (ExternalProductData $item): array => $this->presentItem($item),
             $result->items
@@ -233,7 +257,9 @@ class PublicProductSearch extends Component
         }
 
         $this->page = max(1, $page);
-        $this->status = 'Собираем товары с маркетплейсов...';
+
+        // Page flips are cut out of the cached match set — no scraper
+        // traffic, so no pipeline phase banner either.
 
         // The URLs resolved for the current query stay valid across pages.
         $this->dispatch('run-scrape');

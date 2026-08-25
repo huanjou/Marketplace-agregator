@@ -256,17 +256,28 @@ class AiSearchUrlTest extends TestCase
             ->assertSet('searched', true)
             ->assertSet('status', null)
             ->assertSet('aiUrlsApplied', true)
-            ->assertSee('Ссылки с фильтрами подобраны ИИ');
+            // The AI budget folded into the filters must be remembered so
+            // page flips hit the same cache fingerprint.
+            ->assertSet('resultFilters.max_price_amount', 200000)
+            ->assertSee('Ссылки с фильтрами подобраны ИИ')
+            ->call('gotoPage', 2)
+            ->assertSet('page', 2)
+            ->assertSet('searched', true);
 
-        // The scraper request must carry the AI-built URL override.
-        Http::assertSent(static function ($request): bool {
-            if (! str_contains($request->url(), '/scrape')) {
-                return false;
-            }
+        // The scraper request must carry the AI-built URL override — and it
+        // must be the ONLY one: the page flip is served from the cached set.
+        $scrapeCalls = Http::recorded(
+            static fn ($request, $response): bool => str_contains($request->url(), '/scrape')
+        );
 
-            return ($request['url'] ?? null)
-                === 'https://www.wildberries.ru/catalog/0/search.aspx?search=подушка&price_max=2000';
-        });
+        $this->assertCount(1, $scrapeCalls, 'page flips must not re-run the scrapers');
+
+        [$firstScrape] = $scrapeCalls->first();
+
+        $this->assertSame(
+            'https://www.wildberries.ru/catalog/0/search.aspx?search=подушка&price_max=2000',
+            $firstScrape['url'] ?? null,
+        );
     }
 
     /**
