@@ -28,7 +28,10 @@ function resolveOverrideUrl(candidate) {
     return null;
   }
 
-  if (!parsed.pathname.startsWith('/search')) {
+  if (
+    !parsed.pathname.startsWith('/search') &&
+    !parsed.pathname.startsWith('/category/')
+  ) {
     return null;
   }
 

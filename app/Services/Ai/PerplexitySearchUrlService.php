@@ -60,7 +60,9 @@ class PerplexitySearchUrlService
   диапазоном (например: https://www.ozon.ru/category/sistemnye-bloki-do-100000-rubley/),
   допустимо вернуть её — она точнее обычного поиска.
 - Яндекс Маркет: https://market.yandex.ru/search?text=<запрос>&price_to=<целое число рублей>
-  (минимальная цена — параметром price_from)
+  (минимальная цена — параметром price_from).
+  Готовая категорийная страница (например: https://market.yandex.ru/category/belyye-noski)
+  тоже допустима.
 - Wildberries: https://www.wildberries.ru/catalog/0/search.aspx?search=<запрос>&price_max=<целое число рублей>
   (минимальная цена — параметром price_min)
 PROMPT;
@@ -82,7 +84,9 @@ PROMPT;
         'yandex_market' => [
             'field' => 'yandex_market_search_url',
             'hosts' => ['market.yandex.ru'],
-            'paths' => ['/search'],
+            // Category listings (…/category/belyye-noski) are the same grid of
+            // snippets as the SERP, so they extract identically.
+            'paths' => ['/search', '/category/'],
         ],
         'wildberries' => [
             'field' => 'wildberries_search_url',
