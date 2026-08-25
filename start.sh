@@ -3,7 +3,7 @@
 # Safe to re-run: existing .env, data and seeded rows are left untouched.
 #
 # Usage:
-#   ./start.sh           # up + key + migrate + seed
+#   ./start.sh           # up + key + migrate + seed + cache flush
 #   ./start.sh --build   # same, but force-rebuild container images first
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -74,6 +74,12 @@ done
 
 echo "==> seeders"
 "${COMPOSE[@]}" exec -T app php artisan db:seed --force
+
+echo "==> flushing search cache"
+# Search results and AI-resolved URLs live in the Redis cache store; drop them
+# so every boot starts with fresh scrapes instead of yesterday's match sets.
+# Only the cache DB is cleared — queues and sessions are not touched.
+"${COMPOSE[@]}" exec -T app php artisan cache:clear
 
 echo
 echo "Done. Stack is up:"
