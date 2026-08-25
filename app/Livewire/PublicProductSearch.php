@@ -9,10 +9,12 @@ use App\DTO\Search\ProductSearchFilters;
 use App\DTO\Search\ProductSearchQuery;
 use App\DTO\Search\ProductSort;
 use App\Enums\ProviderCode;
+use App\Services\Ai\PerplexitySearchUrlService;
 use App\Services\ProductSearchService;
 use App\Services\ProviderRegistry;
 use Illuminate\Support\Facades\RateLimiter;
 use Livewire\Attributes\Layout;
+use Livewire\Attributes\On;
 use Livewire\Component;
 use Throwable;
 
@@ -59,6 +61,19 @@ class PublicProductSearch extends Component
 
     public bool $searched = false;
 
+    /**
+     * Human-readable pipeline phase, rendered between the chained round trips
+     * (search -> resolve-search-urls -> run-scrape) so the user sees what the
+     * long request is doing. Null once results are ready.
+     */
+    public ?string $status = null;
+
+    /** @var array<string, string> provider code => AI-built marketplace search URL */
+    public array $searchUrls = [];
+
+    /** Whether the finished search actually used AI-built SERP URLs. */
+    public bool $aiUrlsApplied = false;
+
     public function mount(): void
     {
         $this->providerCodes = array_keys($this->providerOptions());
@@ -78,6 +93,11 @@ class PublicProductSearch extends Component
             ->all();
     }
 
+    /**
+     * Validation + rate limit only: the heavy work is split into chained
+     * round trips (resolve-search-urls -> run-scrape) so the UI can render
+     * the «Ищем ссылки...» phase before the scrapers start.
+     */
     public function search(bool $resetPage = true): void
     {
         $this->notice = null;
@@ -110,13 +130,54 @@ class PublicProductSearch extends Component
         }
 
         $this->query = $text;
+        $this->searched = false;
+        $this->results = null;
+        $this->providerErrors = null;
+        $this->searchUrls = [];
+        $this->aiUrlsApplied = false;
+        $this->status = 'Ищем ссылки...';
+
+        $this->dispatch('resolve-search-urls');
+    }
+
+    /**
+     * Phase 2: ask Perplexity for ready-to-open marketplace search URLs with
+     * filters baked in. Strictly best-effort — on any failure the providers
+     * keep their plain-text search path.
+     */
+    #[On('resolve-search-urls')]
+    public function resolveSearchUrls(): void
+    {
+        try {
+            $urls = app(PerplexitySearchUrlService::class)->urlsFor(trim($this->query));
+        } catch (Throwable) {
+            $urls = [];
+        }
 
         // Never fan out to excluded providers even if the snapshot is tampered with.
+        $allowed = array_flip(array_keys($this->providerOptions()));
+        $selected = array_intersect_key($allowed, array_flip($this->providerCodes));
+
+        $this->searchUrls = array_intersect_key($urls, $selected);
+        $this->status = 'Собираем товары с маркетплейсов...';
+
+        $this->dispatch('run-scrape');
+    }
+
+    /**
+     * Phase 3: run the usual search pipeline, handing each provider its
+     * AI-built SERP URL when one was resolved.
+     */
+    #[On('run-scrape')]
+    public function runScrape(): void
+    {
+        $text = trim($this->query);
+
         $allowed = array_keys($this->providerOptions());
         $codes = array_values(array_intersect($this->providerCodes, $allowed));
 
-        if ($codes === []) {
-            $this->notice = 'Выберите хотя бы один маркетплейс.';
+        if (mb_strlen($text) < 2 || $codes === []) {
+            $this->status = null;
 
             return;
         }
@@ -128,6 +189,7 @@ class PublicProductSearch extends Component
             page: max(1, $this->page),
             perPage: $this->perPage,
             providerCodes: $codes,
+            searchUrls: $this->searchUrls,
         );
 
         $startedAt = microtime(true);
@@ -141,6 +203,7 @@ class PublicProductSearch extends Component
             $this->providerErrors = null;
             $this->lastSearchMs = (int) round((microtime(true) - $startedAt) * 1000);
             $this->notice = 'Поиск временно недоступен: ' . $e->getMessage();
+            $this->status = null;
 
             return;
         }
@@ -153,13 +216,27 @@ class PublicProductSearch extends Component
         );
         $this->total = $result->total;
         $this->providerErrors = $this->collectErrors($result->providerMeta);
+        $this->aiUrlsApplied = $this->searchUrls !== [];
+        $this->status = null;
     }
 
     public function gotoPage(int $page): void
     {
-        $this->page = max(1, $page);
+        if (! RateLimiter::attempt(
+            'public-search:page:' . request()->ip(),
+            self::PAGE_RATE_LIMIT_PER_MINUTE,
+            static fn (): bool => true,
+        )) {
+            $this->notice = 'Слишком много запросов. Подождите минуту и попробуйте снова.';
 
-        $this->search(resetPage: false);
+            return;
+        }
+
+        $this->page = max(1, $page);
+        $this->status = 'Собираем товары с маркетплейсов...';
+
+        // The URLs resolved for the current query stay valid across pages.
+        $this->dispatch('run-scrape');
     }
 
     public function getLastPage(): int

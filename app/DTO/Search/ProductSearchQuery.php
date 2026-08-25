@@ -8,6 +8,10 @@ readonly class ProductSearchQuery
 {
     /**
      * @param string[] $providerCodes
+     * @param array<string, string> $searchUrls provider code => ready-to-open
+     *        marketplace search URL (built by the AI URL service with filters
+     *        baked in); providers without an entry fall back to their own
+     *        plain-text search URL.
      */
     public function __construct(
         public string $text = '',
@@ -17,6 +21,7 @@ readonly class ProductSearchQuery
         public int $perPage = 20,
         public array $providerCodes = [],
         public int $timeoutMs = 5000,
+        public array $searchUrls = [],
     ) {}
 
     public function normalized(): self
@@ -32,6 +37,7 @@ readonly class ProductSearchQuery
             perPage: min(100, max(1, $this->perPage)),
             providerCodes: $codes,
             timeoutMs: $this->timeoutMs,
+            searchUrls: $this->searchUrls,
         );
     }
 

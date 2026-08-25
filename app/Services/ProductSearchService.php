@@ -10,6 +10,7 @@ use App\DTO\Search\ProductSearchQuery;
 use App\DTO\Search\ProductSearchResult;
 use App\Models\Provider;
 use App\Models\SyncLog;
+use App\Services\Ai\PerplexitySearchUrlService;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
@@ -18,8 +19,9 @@ use Throwable;
 /**
  * Entry point for every product search in the application.
  *
- * Pipeline: normalize query -> cache lookup -> provider fan-out -> merge ->
- * de-duplicate/sort/paginate -> best-effort persist -> cache -> log.
+ * Pipeline: normalize query -> cache lookup -> AI search-URL hints ->
+ * provider fan-out -> merge -> de-duplicate/sort/paginate -> best-effort
+ * persist -> cache -> log.
  */
 class ProductSearchService
 {
@@ -35,6 +37,7 @@ class ProductSearchService
         private readonly SearchCacheService $cache,
         private readonly ResultAggregator $aggregator,
         private readonly ProductResultNormalizer $normalizer,
+        private readonly PerplexitySearchUrlService $searchUrls,
     ) {}
 
     public function search(ProductSearchQuery $query): ProductSearchResult
@@ -54,6 +57,7 @@ class ProductSearchService
             perPage: $query->perPage,
             providerCodes: $query->providerCodes,
             timeoutMs: $query->timeoutMs,
+            searchUrls: $query->searchUrls,
         );
 
         $startedAt = CarbonImmutable::now();
@@ -87,6 +91,8 @@ class ProductSearchService
             );
         }
 
+        $query = $this->enrichWithAiSearchUrls($query, $providers);
+
         $fanOut = $this->fanOut($providers, $query);
 
         $result = $this->aggregator->aggregate($fanOut['items'], $query);
@@ -109,6 +115,7 @@ class ProductSearchService
             nextCursor: $result->nextCursor,
             providerMeta: array_merge($result->providerMeta, $fanOut['meta'], [
                 'cache' => ['hit' => false],
+                PerplexitySearchUrlService::META_KEY => $query->searchUrls,
             ]),
         );
 
@@ -137,6 +144,50 @@ class ProductSearchService
         return $this->registry->enabled()
             ->map(static fn (ProductProviderInterface $provider) => $provider->healthCheck())
             ->all();
+    }
+
+    /**
+     * Ask Perplexity for ready-to-open marketplace search URLs (query text
+     * and price filters baked in) and attach them to the query, restricted to
+     * the providers that actually run in this search. Callers that already
+     * supplied their own URLs (tests, jobs) are never overridden.
+     * The call is best-effort: without an API key or on any failure the
+     * providers simply keep their plain-text search path.
+     *
+     * @param Collection<string, ProductProviderInterface> $providers
+     */
+    private function enrichWithAiSearchUrls(ProductSearchQuery $query, Collection $providers): ProductSearchQuery
+    {
+        if ($query->searchUrls !== []) {
+            return $query;
+        }
+
+        try {
+            $urls = $this->searchUrls->urlsFor($query->text);
+        } catch (Throwable $e) {
+            Log::warning('AI search URL resolution failed, continuing without it.', [
+                'exception' => $e::class,
+                'message' => $e->getMessage(),
+                'text' => $query->text,
+            ]);
+
+            return $query;
+        }
+
+        if ($urls === []) {
+            return $query;
+        }
+
+        return new ProductSearchQuery(
+            text: $query->text,
+            filters: $query->filters,
+            sort: $query->sort,
+            page: $query->page,
+            perPage: $query->perPage,
+            providerCodes: $query->providerCodes,
+            timeoutMs: $query->timeoutMs,
+            searchUrls: array_intersect_key($urls, $providers->all()),
+        );
     }
 
     /**

@@ -98,6 +98,8 @@ class YandexMarketProductProvider implements ProductProviderInterface
                 $query->text,
                 $query->page,
                 self::SCRAPE_TIMEOUT_MS,
+                // AI-built SERP URL with filters baked in, when one exists.
+                $query->searchUrls[$this->code()] ?? null,
             );
 
             $items = $this->mapper->mapMany($response->items, $query);
@@ -159,6 +161,7 @@ class YandexMarketProductProvider implements ProductProviderInterface
                 'text' => $query->text,
                 'page' => $query->page,
                 'per_page' => $query->perPage,
+                'ai_search_url' => $query->searchUrls[$this->code()] ?? null,
             ],
         ]);
     }

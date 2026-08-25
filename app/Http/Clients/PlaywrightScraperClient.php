@@ -38,23 +38,34 @@ final class PlaywrightScraperClient
      * Scrape one provider search page. The returned items are raw snake_case
      * dicts — mapping into DTOs belongs to the per-provider mappers.
      *
+     * When $searchUrl is given, the scraper opens that exact URL (a SERP
+     * pre-built by the AI URL service with filters baked in) instead of
+     * composing its own plain-text search link; the scraper side re-validates
+     * the URL against the store's own domain before navigating.
+     *
      * @throws ProviderUnavailableException
      */
-    public function scrape(string $provider, string $query, int $page = 1, ?int $timeoutMs = null): PlaywrightScrapeResponse
+    public function scrape(string $provider, string $query, int $page = 1, ?int $timeoutMs = null, ?string $searchUrl = null): PlaywrightScrapeResponse
     {
         $budgetMs = $timeoutMs ?? $this->timeoutMs;
+
+        $body = [
+            'provider' => $provider,
+            'query' => $query,
+            'page' => $page,
+            'timeout_ms' => $budgetMs,
+        ];
+
+        if ($searchUrl !== null) {
+            $body['url'] = $searchUrl;
+        }
 
         try {
             $response = Http::acceptJson()
                 ->connectTimeout(self::CONNECT_TIMEOUT_SECONDS)
                 ->timeout(max(3, intdiv($budgetMs, 1000) + 2))
                 ->retry(1, 200, throw: false)
-                ->post($this->url('/scrape'), [
-                    'provider' => $provider,
-                    'query' => $query,
-                    'page' => $page,
-                    'timeout_ms' => $budgetMs,
-                ]);
+                ->post($this->url('/scrape'), $body);
         } catch (ConnectionException $e) {
             throw new ProviderUnavailableException(
                 $provider,

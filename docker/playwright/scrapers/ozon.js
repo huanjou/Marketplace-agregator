@@ -3,6 +3,41 @@ import { performance } from 'node:perf_hooks';
 const BASE_URL = 'https://www.ozon.ru';
 const MAX_RAW_PAYLOAD_CHARS = 2048;
 
+/** Hosts an externally supplied SERP URL may ever point at. */
+const ALLOWED_HOSTS = new Set(['www.ozon.ru', 'ozon.ru']);
+
+/**
+ * Validates an optional AI-built SERP URL: https only, allow-listed host,
+ * SERP path prefix. Anything suspicious returns null and the caller falls
+ * back to composing its own plain-text search link.
+ */
+function resolveOverrideUrl(candidate) {
+  if (!candidate || typeof candidate !== 'string') {
+    return null;
+  }
+
+  let parsed;
+
+  try {
+    parsed = new URL(candidate);
+  } catch {
+    return null;
+  }
+
+  if (parsed.protocol !== 'https:' || !ALLOWED_HOSTS.has(parsed.hostname)) {
+    return null;
+  }
+
+  if (
+    !parsed.pathname.startsWith('/search') &&
+    !parsed.pathname.startsWith('/category/')
+  ) {
+    return null;
+  }
+
+  return parsed.toString();
+}
+
 const TILE_SELECTOR =
   'div[data-widget="searchResultsV2"] .tile-root, .tile-root, .tile-hover-target';
 
@@ -285,15 +320,16 @@ async function warmUpSession(page, budgetMs, elapsed, timeoutMs) {
  * Scrapes the Ozon search results page. JSON-first (`__NEXT_DATA__`), DOM fallback.
  * Throws `{ code: 'ANTIBOT' }` on captcha and `{ code: 'INTERNAL' }` for anything else.
  */
-export async function scrape(page, { query, page: pageNum = 1, timeout_ms: timeoutMs = 8000 }) {
+export async function scrape(page, { query, page: pageNum = 1, timeout_ms: timeoutMs = 8000, url: overrideUrl = null }) {
   const startedAt = performance.now();
   const elapsed = () => Math.round(performance.now() - startedAt);
 
   const url =
+    resolveOverrideUrl(overrideUrl) ??
     BASE_URL +
-    '/search/?text=' +
-    encodeURIComponent(query ?? '') +
-    (pageNum > 1 ? '&page=' + pageNum : '');
+      '/search/?text=' +
+      encodeURIComponent(query ?? '') +
+      (pageNum > 1 ? '&page=' + pageNum : '');
 
   let extractionMode = 'failed';
   let items = [];

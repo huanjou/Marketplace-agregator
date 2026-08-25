@@ -42,12 +42,15 @@ const scrapeSchema = {
       query: { type: 'string', minLength: 0, maxLength: 200 },
       page: { type: 'integer', minimum: 1, default: 1 },
       timeout_ms: { type: 'integer', minimum: 1000, maximum: 30000, default: 8000 },
+      // Optional AI-built SERP URL; the scraper re-validates it against the
+      // store's own domain and falls back to the plain search link if it fails.
+      url: { type: 'string', maxLength: 2048 },
     },
   },
 };
 
 app.post('/scrape', { schema: scrapeSchema }, async (request, reply) => {
-  const { provider, query, page: pageNum = 1, timeout_ms: timeoutMs = 8000 } = request.body;
+  const { provider, query, page: pageNum = 1, timeout_ms: timeoutMs = 8000, url } = request.body;
   const startedAt = performance.now();
   const elapsed = () => Math.round(performance.now() - startedAt);
 
@@ -80,7 +83,7 @@ app.post('/scrape', { schema: scrapeSchema }, async (request, reply) => {
 
   try {
     const result = await Promise.race([
-      scraper.scrape(browserPage, { query, page: pageNum, timeout_ms: timeoutMs }),
+      scraper.scrape(browserPage, { query, page: pageNum, timeout_ms: timeoutMs, url }),
       new Promise((_resolve, rejectRace) => {
         setTimeout(
           () => rejectRace({ code: 'TIMEOUT', message: `scrape exceeded ${timeoutMs}ms` }),

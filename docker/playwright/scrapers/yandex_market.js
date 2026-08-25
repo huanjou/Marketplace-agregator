@@ -3,6 +3,38 @@ import { performance } from 'node:perf_hooks';
 const BASE_URL = 'https://market.yandex.ru';
 const MAX_RAW_PAYLOAD_CHARS = 2048;
 
+/** Hosts an externally supplied SERP URL may ever point at. */
+const ALLOWED_HOSTS = new Set(['market.yandex.ru']);
+
+/**
+ * Validates an optional AI-built SERP URL: https only, allow-listed host,
+ * SERP path prefix. Anything suspicious returns null and the caller falls
+ * back to composing its own plain-text search link.
+ */
+function resolveOverrideUrl(candidate) {
+  if (!candidate || typeof candidate !== 'string') {
+    return null;
+  }
+
+  let parsed;
+
+  try {
+    parsed = new URL(candidate);
+  } catch {
+    return null;
+  }
+
+  if (parsed.protocol !== 'https:' || !ALLOWED_HOSTS.has(parsed.hostname)) {
+    return null;
+  }
+
+  if (!parsed.pathname.startsWith('/search')) {
+    return null;
+  }
+
+  return parsed.toString();
+}
+
 /** Verified against the live SERP: snippets carry `data-zone-name="productSnippet"`. */
 const SNIPPET_SELECTOR =
   '[data-zone-name="productSnippet"], [data-auto="snippet-list"] article, [data-baobab-name="$serpProduct"], [data-zone-name="snippet-card"]';
@@ -304,15 +336,16 @@ function normalizeJsonEntry(entry) {
  * Scrapes Yandex Market search results. Flight-JSON first, DOM selectors as fallback.
  * Throws `{ code: 'ANTIBOT' }` on captcha and `{ code: 'INTERNAL' }` otherwise.
  */
-export async function scrape(page, { query, page: pageNum = 1, timeout_ms: timeoutMs = 8000 }) {
+export async function scrape(page, { query, page: pageNum = 1, timeout_ms: timeoutMs = 8000, url: overrideUrl = null }) {
   const startedAt = performance.now();
   const elapsed = () => Math.round(performance.now() - startedAt);
 
   const url =
+    resolveOverrideUrl(overrideUrl) ??
     BASE_URL +
-    '/search?text=' +
-    encodeURIComponent(query ?? '') +
-    (pageNum > 1 ? '&page=' + pageNum : '');
+      '/search?text=' +
+      encodeURIComponent(query ?? '') +
+      (pageNum > 1 ? '&page=' + pageNum : '');
 
   let extractionMode = 'failed';
   let items = [];

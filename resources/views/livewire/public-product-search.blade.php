@@ -12,7 +12,7 @@
                     autocomplete="off"
                 >
                 <button type="submit" wire:loading.attr="disabled">
-                    <span wire:loading wire:target="search,gotoPage"><span class="spinner"></span></span>Найти
+                    <span wire:loading wire:target="search,resolveSearchUrls,runScrape,gotoPage"><span class="spinner"></span></span>Найти
                 </button>
             </div>
             <div class="providers">
@@ -35,11 +35,18 @@
                 {{ implode(' · ', $providerErrors) }}
             </div>
         @endif
+
+        @if ($status)
+            <div class="status"><span class="spinner"></span>{{ $status }}</div>
+        @endif
     </div>
 
     @if ($searched)
         <div class="meta">
-            Найдено: {{ $total }} · {{ $lastSearchMs }} мс
+            <span>Найдено: {{ $total }} · {{ $lastSearchMs }} мс</span>
+            @if ($aiUrlsApplied)
+                <span class="ai-note">Ссылки с фильтрами подобраны ИИ</span>
+            @endif
         </div>
 
         @if ($results === [])

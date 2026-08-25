@@ -35,4 +35,19 @@ return [
         ],
     ],
 
+    /*
+    | Perplexity (sonar) translates free-text user queries into ready-to-open
+    | marketplace search URLs with filters baked in. The feature is enabled
+    | automatically whenever a key is set; without one searches simply fall
+    | back to the plain-text scraper path.
+    */
+    'perplexity' => [
+        'key' => env('PERPLEXITY_API_KEY'),
+        'base_url' => env('PERPLEXITY_BASE_URL', 'https://api.perplexity.ai'),
+        'model' => env('PERPLEXITY_MODEL', 'sonar'),
+        'timeout_ms' => (int) env('PERPLEXITY_TIMEOUT_MS', 15000),
+        'max_tokens' => (int) env('PERPLEXITY_MAX_TOKENS', 700),
+        'temperature' => (float) env('PERPLEXITY_TEMPERATURE', 0.2),
+    ],
+
 ];

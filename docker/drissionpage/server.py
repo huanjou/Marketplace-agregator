@@ -12,7 +12,10 @@ bound to the thread that launched the browser); FastAPI endpoints hand jobs
 to it through a queue.
 
 The HTTP contract is unchanged: POST /scrape {provider, query, page,
-timeout_ms} -> {items, meta}, GET /health. Items are snake_case dicts,
+timeout_ms, url?} -> {items, meta}, GET /health. When `url` is given it is
+an AI-built SERP with filters baked in; it is validated against the ozon.ru
+host before navigation, otherwise the plain search link is composed. Items
+are snake_case dicts,
 JSON-first (__NEXT_DATA__) with a DOM fallback — same shape the Playwright
 service returns for the other providers.
 """
@@ -23,6 +26,7 @@ import queue
 import threading
 import time
 import urllib.parse
+from typing import Optional
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
@@ -52,6 +56,29 @@ class ScrapeRequest(BaseModel):
     query: str
     page: int = 1
     timeout_ms: int = 30000
+    # Optional AI-built SERP URL; re-validated below before navigation.
+    url: Optional[str] = None
+
+
+# Hosts an externally supplied SERP URL may ever point at.
+ALLOWED_HOSTS = {"www.ozon.ru", "ozon.ru"}
+
+
+def resolve_override_url(candidate: Optional[str]) -> Optional[str]:
+    """Validate an AI-built SERP URL: https only, allow-listed host, SERP or
+    category path prefix. Anything suspicious returns None and the caller
+    falls back to composing its own plain-text search link."""
+    if not candidate:
+        return None
+    try:
+        parsed = urllib.parse.urlparse(candidate)
+    except ValueError:
+        return None
+    if parsed.scheme != "https" or parsed.hostname not in ALLOWED_HOSTS:
+        return None
+    if not (parsed.path.startswith("/search") or parsed.path.startswith("/category/")):
+        return None
+    return candidate
 
 
 def parse_proxy(url: str):
@@ -326,7 +353,7 @@ class BrowserWorker:
         page.mouse.up()
         return True
 
-    def _scrape(self, query: str, page_num: int, budget_ms: int) -> dict:
+    def _scrape(self, query: str, page_num: int, budget_ms: int, search_url: Optional[str] = None) -> dict:
         start = time.time()
         budget_ms = max(budget_ms, 10000)
 
@@ -349,9 +376,11 @@ class BrowserWorker:
         if needs_warm:
             self._warm_session(page, max(15000, budget_ms // 2))
 
-        url = f"{BASE_URL}/search/?text={urllib.parse.quote(query)}"
-        if page_num > 1:
-            url += f"&page={page_num}"
+        url = resolve_override_url(search_url)
+        if url is None:
+            url = f"{BASE_URL}/search/?text={urllib.parse.quote(query)}"
+            if page_num > 1:
+                url += f"&page={page_num}"
 
         response = page.goto(url, timeout=max(5000, remaining_ms()), wait_until="domcontentloaded")
         status = response.status if response else 0
@@ -432,8 +461,8 @@ class BrowserWorker:
             return payload
         raise ScrapeError(payload.get("code", "INTERNAL"), payload.get("message", "unknown error"))
 
-    def scrape(self, query: str, page_num: int, budget_ms: int) -> dict:
-        return self.submit(self._scrape, query, page_num, budget_ms)
+    def scrape(self, query: str, page_num: int, budget_ms: int, search_url: Optional[str] = None) -> dict:
+        return self.submit(self._scrape, query, page_num, budget_ms, search_url)
 
     def health(self) -> dict:
         return self.submit(self._health)
@@ -470,7 +499,7 @@ def scrape(req: ScrapeRequest):
 
     started = time.time()
     try:
-        return WORKER.scrape(req.query, req.page, req.timeout_ms)
+        return WORKER.scrape(req.query, req.page, req.timeout_ms, req.url)
     except ScrapeError as e:
         return {
             "error": {

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Providers;
 
+use App\Http\Clients\PerplexityClient;
 use App\Http\Clients\PlaywrightScraperClient;
 use App\Services\ProviderRegistry;
 use App\Services\Providers\Fake\FakeProductProvider;
@@ -34,6 +35,7 @@ class AppServiceProvider extends ServiceProvider
     public function register(): void
     {
         $this->registerScraperClient();
+        $this->registerPerplexityClient();
 
         foreach (self::PRODUCT_PROVIDER_CLASSES as $providerClass) {
             $this->app->singleton($providerClass);
@@ -76,5 +78,23 @@ class AppServiceProvider extends ServiceProvider
                     timeoutMs: (int) $app['config']->get('marketplace.drissionpage.timeout_ms'),
                 );
             });
+    }
+
+    /**
+     * The Perplexity client is built from config here; an empty API key keeps
+     * the client in a disabled state instead of breaking the container.
+     */
+    private function registerPerplexityClient(): void
+    {
+        $this->app->singleton(PerplexityClient::class, static function (Application $app): PerplexityClient {
+            return new PerplexityClient(
+                apiKey: (string) $app['config']->get('services.perplexity.key', ''),
+                baseUrl: (string) $app['config']->get('services.perplexity.base_url', 'https://api.perplexity.ai'),
+                model: (string) $app['config']->get('services.perplexity.model', 'sonar'),
+                timeoutMs: (int) $app['config']->get('services.perplexity.timeout_ms', 15000),
+                maxTokens: (int) $app['config']->get('services.perplexity.max_tokens', 700),
+                temperature: (float) $app['config']->get('services.perplexity.temperature', 0.2),
+            );
+        });
     }
 }

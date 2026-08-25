@@ -68,7 +68,17 @@
         .providers label { display: flex; align-items: center; gap: 6px; font-size: 14px; color: var(--muted); cursor: pointer; }
         .notice { margin-top: 12px; font-size: 14px; color: var(--danger); }
         .partial { margin-top: 12px; font-size: 13px; color: var(--muted); }
-        .meta { margin: 18px 0 10px; font-size: 13px; color: var(--muted); }
+        .status { margin-top: 12px; font-size: 14px; color: var(--muted); }
+        .status .spinner { border-color: rgba(0,0,0,.15); border-top-color: var(--ink); }
+        .meta { margin: 18px 0 10px; font-size: 13px; color: var(--muted); display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+        .ai-note {
+            padding: 2px 10px;
+            border: 1px solid #f5d442;
+            border-radius: 999px;
+            background: #fef6c2;
+            color: #8a6d00;
+            font-size: 12px;
+        }
         .grid {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));

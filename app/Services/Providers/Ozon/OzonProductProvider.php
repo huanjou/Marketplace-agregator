@@ -182,6 +182,8 @@ class OzonProductProvider implements ProductProviderInterface
                 $query->text,
                 $query->page,
                 self::SEARCH_TIMEOUT_MS,
+                // AI-built SERP URL with filters baked in, when one exists.
+                $query->searchUrls[$this->code()] ?? null,
             );
 
             $items = $this->mapper->mapMany($response->items, $query);
@@ -250,6 +252,7 @@ class OzonProductProvider implements ProductProviderInterface
             'per_page' => $query->perPage,
             'timeout_ms' => self::SEARCH_TIMEOUT_MS,
             'transport' => 'camoufox',
+            'ai_search_url' => $query->searchUrls[$this->code()] ?? null,
         ];
     }
 
