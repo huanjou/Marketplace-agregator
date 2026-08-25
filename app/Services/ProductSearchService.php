@@ -292,6 +292,20 @@ class ProductSearchService
                     ]
                 );
 
+                // A technically successful run that brings zero items is almost
+                // always an anti-bot block (challenge/captcha page) and must
+                // not be silently swallowed by the UI.
+                if ($providerResult->items === []) {
+                    $meta[$code]['warning'] = 'empty_result';
+                    $meta[$code]['error'] = 'не вернул товары (возможна антибот-защита)';
+
+                    Log::warning('Provider search succeeded but returned no items.', [
+                        'provider_code' => $code,
+                        'text' => $query->text,
+                        'duration_ms' => $durationMs,
+                    ]);
+                }
+
                 if ($durationMs > $query->timeoutMs) {
                     Log::warning('Provider search exceeded its time budget.', [
                         'provider_code' => $code,
