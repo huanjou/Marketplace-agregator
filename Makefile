@@ -55,3 +55,6 @@ seed:
 
 playwright-restart:
 	docker compose restart playwright
+
+bot-restart:
+	docker compose restart telegram-bot

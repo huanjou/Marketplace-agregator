@@ -64,19 +64,12 @@ class ProductSearchService
         $startedAt = CarbonImmutable::now();
         $startedAtMs = microtime(true);
 
-        $cached = $this->cache->get($query);
-
-        if ($cached !== null) {
-            Log::debug('Product search served from cache.', [
-                'cache_key' => $this->cache->cacheKey($query),
-                'text' => $query->text,
-                'total' => $cached->total,
-            ]);
-
-            // The cache holds the whole sorted match set; the requested page
-            // is cut out in memory without touching any scraper.
-            return $cached->forPage($requestedPage, $query->perPage);
-        }
+        // Кеш временно отключён, чтобы каждый запрос вызывал реальный поиск у провайдеров.
+        // $cached = $this->cache->get($query);
+        // if ($cached !== null) {
+        //     ...
+        //     return $cached->forPage($requestedPage, $query->perPage);
+        // }
 
         $providers = $this->registry
             ->matching($query->providerCodes)

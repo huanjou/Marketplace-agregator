@@ -200,6 +200,42 @@ services:
     networks:
       - agregator
 
+  telegram-bot:
+    build:
+      context: .
+      dockerfile: docker/php/Dockerfile
+    image: agregator-app
+    container_name: agregator-telegram-bot
+    restart: unless-stopped
+    working_dir: /var/www/html
+    command: php artisan nutgram:run
+    volumes:
+      - .:/var/www/html
+    environment:
+      APP_NAME: Agregator
+      APP_ENV: local
+      APP_DEBUG: "true"
+      DB_CONNECTION: pgsql
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_DATABASE: agregator
+      DB_USERNAME: agregator
+      DB_PASSWORD: secret
+      CACHE_STORE: redis
+      QUEUE_CONNECTION: redis
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      TELEGRAM_TOKEN: ${TELEGRAM_TOKEN}
+    depends_on:
+      app:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - agregator
+
 volumes:
   pg_data:
   redis_data:

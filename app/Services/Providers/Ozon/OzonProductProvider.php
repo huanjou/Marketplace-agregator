@@ -45,10 +45,10 @@ class OzonProductProvider implements ProductProviderInterface
      * additionally pays a one-off antibot warm-up on the homepage (~15-20s);
      * warm searches finish well inside this budget.
      */
-    private const SEARCH_TIMEOUT_MS = 45000;
+    private const SEARCH_TIMEOUT_MS = 60000;
 
     /** Health probes share the search budget: a cold warm-up must fit too. */
-    private const HEALTH_TIMEOUT_MS = 45000;
+    private const HEALTH_TIMEOUT_MS = 60000;
 
     /** Cheap, always-populated query used as the health canary. */
     private const HEALTH_CANARY_QUERY = 'test';
